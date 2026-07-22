@@ -41,7 +41,9 @@ touch it.
    fixes invisible assets, missing audio and typos the port introduced.
 4. **Optionally installs the Better Audio Mod** from a zip you supply.
 5. **Writes a tuned, known-good `MGSHDFix.settings`** for each game.
-6. **Verifies** every file landed, then tells you the one line to paste into
+6. **Sets the Konami launcher's own options for you** — including **high
+   quality cinematics** — so the launcher can be skipped entirely.
+7. **Verifies** every file landed, then tells you the one line to paste into
    Steam.
 
 Everything is downloaded live from the mods' **official GitHub releases** —
@@ -105,22 +107,45 @@ WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%
 Without this, MGSHDFix never loads. (MGSHDFix 3.1.0 uses `winhttp.dll` /
 `wininet.dll` — the old `d3d11.dll` advice is for ancient versions.)
 
-## First launch & the launcher
+## High-quality cinematics, and skipping the launcher
 
-On first launch the Konami launcher appears. That is the **only** place to set
-the game's *high quality cinematics* option, and the choice is saved
-permanently (in `<game>_savedata_win/<steamid>/launcher/launcher_sv`).
+Normally the Konami launcher is the **only** place to turn on the game's *high
+quality cinematics* — which creates a chicken-and-egg problem, because skipping
+the launcher then locks you out of that setting forever.
 
-Set it there **first**. Afterwards, if you'd rather boot straight into the game,
-edit `plugins/MGSHDFix.settings` and set:
+This kit solves it by writing the launcher's settings directly. They live in
 
 ```
-Skip Launcher=1
+<game>/<name>_savedata_win/<steamid64>/launcher/launcher_sv
 ```
 
-The installer offers this as an option but defaults it **off** for exactly this
-reason. (Skipping is safe for MGS2/MGS3 — the `MSX Skip Launcher Game` setting
-only applies to the separate *Metal Gear / Metal Gear 2* MSX release.)
+which is plain JSON (UTF-8 BOM) holding two parallel arrays:
+
+```json
+{"keyList":["HiresoRender","HiresoUpScale","HiresoMovie","HiresoTexture"],
+ "valueList":[     "0",         "0",            "1",           "0"      ]}
+```
+
+- `HiresoMovie=1` — **high quality cinematics** ✅
+- `HiresoRender=0` / `HiresoUpScale=0` — internal resolution/upscaling left at
+  Original, because **MGSHDFix owns resolution**; letting the launcher also
+  scale makes the two fight each other
+- `HiresoTexture` — MGS3 only, high-resolution textures (offered as an option)
+
+If a save already exists it is **patched in place**, preserving everything else
+(volume, language, and MGS2's ~8.7 KB `ScenarioSave` blob). If none exists —
+a fresh install where the launcher has never run — a complete one is
+synthesised, with the steamid64 derived from your Steam `userdata` folder.
+
+The writer reproduces the launcher's own byte layout exactly (BOM, compact
+separators, trailing CRLF); a no-op patch is **byte-identical** to the original
+file, verified against a real save.
+
+Because the settings are applied for you, **`Skip Launcher` defaults to on** and
+the games boot straight in. Skipping is safe for MGS2/MGS3 — the
+`MSX Skip Launcher Game` setting only applies to the separate *Metal Gear /
+Metal Gear 2* MSX release. To get the launcher back, edit
+`plugins/MGSHDFix.settings` → `Skip Launcher=0`.
 
 ## Options the installer asks about
 
@@ -128,8 +153,10 @@ only applies to the separate *Metal Gear / Metal Gear 2* MSX release.)
 |---|---|---|
 | Button icons | `Steam Deck` | Matches the Deck's physical buttons. Xbox / PS5 / PS2 / Keyboard also offered — PS2 icons are restored by the Bugfix Compilation. |
 | Audio output | `Stereo (2.0)` | Right for handheld. Pick 5.1 if docked to a receiver. |
+| High-quality cinematics | **on** | Written to the launcher save for you. |
 | Skip intro logos | on | Skips the unskippable KONAMI splash screens. |
-| Skip launcher | off | See above. |
+| Skip launcher | **on** | Safe, because the launcher's options are set above. |
+| MGS3 high-res textures | off | Uses the game's `hqtex` assets (which the Bugfix Compilation also patches). Off by default to match the tested config. |
 | MGSHDFix update checks | off | Avoids in-game pop-ups mid-play. |
 
 Everything else is left at MGSHDFix's own defaults, which are already correct
@@ -148,6 +175,10 @@ these by hand if you want a totally clean slate:
 
 ```
 winhttp.dll  wininet.dll  plugins/  logs/  steam_appid.txt
+
+The launcher settings written by this kit live in the save folder
+(`<name>_savedata_win/<steamid64>/launcher/launcher_sv`) — delete that file and
+the launcher rebuilds it with defaults on next run.
 ```
 
 ## Versions are pinned on purpose

@@ -13,8 +13,10 @@ It will:
   4. Optionally install the Better Audio Mod from a zip you supply (it lives on
      NexusMods, which requires a login, so it cannot be fetched automatically).
   5. Write a KNOWN-GOOD MGSHDFix.settings file, tuned for the Deck.
+  6. Set the Konami launcher's own options for you — including "high quality
+     cinematics" — so the launcher can be skipped entirely.
 
-Step 5 is the whole reason this kit exists. MGSHDFix has no runtime defaults:
+Steps 5 and 6 are the whole reason this kit exists. MGSHDFix has no runtime defaults:
 without a complete settings file it refuses to boot, and it hard-aborts on any
 single missing section or key. That file can only be produced by its Windows
 Config Tool, and its ini section names are NOT the names shown in that tool's
@@ -66,6 +68,7 @@ HDFIX_URL = (
 
 GAMES = {
     "mgs2": {
+        "key": "mgs2",
         "name": "Metal Gear Solid 2: Sons of Liberty",
         "short": "MGS2",
         "appid": "2131640",
@@ -83,6 +86,7 @@ GAMES = {
         "audio_page": "https://www.nexusmods.com/metalgearsolid2mc/mods/3",
     },
     "mgs3": {
+        "key": "mgs3",
         "name": "Metal Gear Solid 3: Snake Eater",
         "short": "MGS3",
         "appid": "2131650",
@@ -269,6 +273,47 @@ Window Width=0
 
 SETTINGS_EXPECTED_SECTIONS = 27
 SETTINGS_EXPECTED_KEYS = 96
+
+# ---------------------------------------------------------------------------
+# The Konami launcher's own settings.
+#
+# The launcher persists its options to
+#   <game>/<name>_savedata_win/<steamid64>/launcher/launcher_sv
+# which is plain JSON with a UTF-8 BOM, stored as two parallel arrays:
+#   {"keyList":["HiresoMovie",...],"valueList":["1",...]}
+#
+# The keys we care about:
+#   HiresoMovie    1 = "high quality" cinematics  (the one everyone wants)
+#   HiresoRender   internal resolution   -> 0, MGSHDFix owns resolution
+#   HiresoUpScale  internal upscaling    -> 0, ditto
+#   HiresoTexture  high-res textures (MGS3 only)
+#
+# Writing this ourselves is what lets the kit skip the launcher entirely:
+# otherwise the launcher is the ONLY place those options can be set.
+#
+# Templates below are used only when no save exists yet (a fresh install).
+# When one already exists we patch it in place and leave everything else —
+# volume, language, MGS2's big ScenarioSave blob — untouched.
+# ---------------------------------------------------------------------------
+LAUNCHER_TEMPLATES = {
+    "mgs2": (
+        ["GDPRHash", "firstStart", "languageLauncher", "HiresoPreset",
+         "launcherMasterVolume", "launcherMute", "HiresoRender",
+         "HiresoUpScale", "HiresoMovie", "prevPlayLanguage",
+         "prevPlayLanguage2", "prevGameRegion", "prevSelectStartUpNumber"],
+        ["first", "0", "1", "2", "10", "0", "0", "0", "1", "2", "0", "2", "-1"],
+    ),
+    "mgs3": (
+        ["GDPRHash", "firstStart", "languageLauncher", "HiresoPreset",
+         "HiresoRender", "HiresoUpScale", "HiresoMovie", "HiresoTexture",
+         "launcherMasterVolume", "launcherMute", "prevPlayLanguage",
+         "prevPlayLanguage2", "prevGameRegion", "prevSelectStartUpNumber"],
+        ["first", "0", "1", "2", "0", "0", "1", "0", "10", "0", "2", "0",
+         "1", "-1"],
+    ),
+}
+
+STEAMID64_BASE = 76561197960265728
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +578,80 @@ def write_settings(game_dir: Path, g: dict, opts: dict, log) -> None:
     log(f"    ✓ plugins/MGSHDFix.settings ({sections} sections, {keys} keys)")
 
 
+def steamid64s(steam_root: Path) -> list[int]:
+    """Every Steam account on this machine, as steamid64."""
+    out = []
+    ud = steam_root / "userdata"
+    if ud.is_dir():
+        for d in ud.iterdir():
+            if d.is_dir() and d.name.isdigit():
+                out.append(int(d.name) + STEAMID64_BASE)
+    return out
+
+
+def _read_launcher_sv(path: Path) -> dict[str, str]:
+    import json
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    return dict(zip(data["keyList"], data["valueList"]))
+
+
+def _write_launcher_sv(path: Path, keys: list[str], vals: list[str]) -> None:
+    import json
+    body = json.dumps({"keyList": keys, "valueList": vals},
+                      separators=(",", ":"), ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # UTF-8 BOM + trailing CRLF, byte-for-byte as the launcher writes it.
+    path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8") + b"\r\n")
+
+
+def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
+                         opts: dict, log) -> None:
+    """Apply the launcher's own options so the launcher can be skipped."""
+    wanted = {
+        "HiresoMovie": "1" if opts["hq_movies"] else "0",
+        # MGSHDFix owns resolution/upscaling; the launcher must stay at
+        # Default/Original or the two fight each other.
+        "HiresoRender": "0",
+        "HiresoUpScale": "0",
+    }
+    if g["key"] == "mgs3":
+        wanted["HiresoTexture"] = "1" if opts.get("hq_textures") else "0"
+
+    save_root = game_dir / f"{g['dirname'].lower()}_savedata_win"
+    existing = sorted(save_root.glob("*/launcher/launcher_sv"))
+
+    if existing:
+        for sv in existing:
+            try:
+                cur = _read_launcher_sv(sv)
+            except (ValueError, KeyError, OSError) as e:
+                log(f"    ⚠ couldn't parse {sv.name} ({e}); leaving it alone")
+                continue
+            cur.update(wanted)
+            _write_launcher_sv(sv, list(cur.keys()), list(cur.values()))
+            log(f"    ✓ launcher options patched ({sv.parent.parent.name})")
+        return
+
+    # Fresh install — the launcher has never run, so synthesise its save.
+    keys, vals = LAUNCHER_TEMPLATES[g["key"]]
+    keys, vals = list(keys), list(vals)
+    for k, v in wanted.items():
+        if k in keys:
+            vals[keys.index(k)] = v
+        else:
+            keys.append(k)
+            vals.append(v)
+    ids = steamid64s(steam_root)
+    if not ids:
+        log("    ⚠ no Steam account found; skipping launcher options "
+            "(set them in the launcher on first run)")
+        return
+    for sid in ids:
+        _write_launcher_sv(save_root / str(sid) / "launcher" / "launcher_sv",
+                           keys, vals)
+        log(f"    ✓ launcher options created ({sid})")
+
+
 def verify_install(g: dict, game_dir: Path) -> list[str]:
     """Return a list of human-readable problems (empty == all good)."""
     problems = []
@@ -665,31 +784,23 @@ def main() -> int:
 
     extras = ui.checklist(
         "Extra Options", "Optional tweaks (recommended defaults shown):",
-        [("skip_splash", "Skip the unskippable KONAMI intro logos", True),
-         ("update_check", "Check for MGSHDFix updates on launch", False),
-         ("skip_launcher",
-          "Skip the Konami launcher entirely  (see warning below)", False)],
+        [("hq_movies", "High-quality cinematics  (set for you — no launcher "
+                       "trip needed)", True),
+         ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
+         ("skip_launcher", "Skip the Konami launcher and boot straight into "
+                           "the game", True),
+         ("hq_textures", "MGS3 only: high-resolution textures", False),
+         ("update_check", "Check for MGSHDFix updates on launch", False)],
     )
     opts = {
         "button_icons": icons,
         "audio_mode": audio,
+        "hq_movies": "hq_movies" in extras,
+        "hq_textures": "hq_textures" in extras,
         "skip_splash": "skip_splash" in extras,
         "update_check": "update_check" in extras,
         "skip_launcher": "skip_launcher" in extras,
     }
-
-    if opts["skip_launcher"]:
-        keep = ui.yesno(
-            "You chose to SKIP THE LAUNCHER.\n\n"
-            "The launcher is the only place to set the game's 'high quality "
-            "cinematics' option. If you skip it before setting that, you "
-            "won't be able to reach it.\n\n"
-            "Recommended: leave the launcher ON for now, set high-quality "
-            "cinematics on first launch, then re-run this kit (or edit\n"
-            "plugins/MGSHDFix.settings → Skip Launcher=1).\n\n"
-            "Keep the launcher enabled for now? (Yes = recommended)")
-        if keep:
-            opts["skip_launcher"] = False
 
     # 4. Better Audio Mod (manual archive) ----------------------------------
     audio_archives: dict[str, Path] = {}
@@ -743,13 +854,14 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="mgskit_") as td:
             tmp = Path(td)
             for key in found:
-                g, (game_dir, _) = GAMES[key], found[key]
+                g, (game_dir, sroot) = GAMES[key], found[key]
                 log(f"\n=== {g['name']} ===")
                 install_hdfix(game_dir, tmp, log)            # 1
                 if key in audio_archives:                    # 2
                     install_better_audio(game_dir, audio_archives[key], log)
                 install_bugfix(g, game_dir, tmp, log)        # 3
                 write_settings(game_dir, g, opts, log)
+                set_launcher_options(game_dir, g, sroot, opts, log)
                 for f in tmp.glob("*.zip"):
                     f.unlink(missing_ok=True)
     except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError,
@@ -774,13 +886,17 @@ def main() -> int:
     # 8. Final manual steps -------------------------------------------------
     names = ", ".join(GAMES[k]["short"] for k in found)
     launcher_note = (
-        "3) FIRST LAUNCH — the Konami launcher will appear. Set the\n"
-        "   'high quality cinematics' option there (it's saved permanently).\n"
-        "   Afterwards you can skip the launcher by editing\n"
-        "   plugins/MGSHDFix.settings → Skip Launcher=1\n\n"
-        if not opts["skip_launcher"] else
-        "3) The launcher is set to be SKIPPED. If you need it back, edit\n"
-        "   plugins/MGSHDFix.settings → Skip Launcher=0\n\n"
+        "3) The Konami launcher is SKIPPED — the games boot straight in.\n"
+        f"   High-quality cinematics: {'ON' if opts['hq_movies'] else 'off'} "
+        "(already applied for you).\n"
+        "   Need the launcher back? Edit plugins/MGSHDFix.settings →\n"
+        "   Skip Launcher=0\n\n"
+        if opts["skip_launcher"] else
+        "3) The Konami launcher will still appear on launch. Its options\n"
+        f"   are already set for you (high-quality cinematics: "
+        f"{'ON' if opts['hq_movies'] else 'off'}), so you can just hit Play.\n"
+        "   To skip it entirely, edit plugins/MGSHDFix.settings →\n"
+        "   Skip Launcher=1\n\n"
     )
     ui.info(
         f"✅ Done — {names} modded and verified!\n\n"
