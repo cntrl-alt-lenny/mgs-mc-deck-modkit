@@ -132,9 +132,11 @@ you get the good cutscenes *and* skip the launcher.
 >
 > 🔎 **Device detection:** the installer recognises a Steam Deck (DMI
 > `Valve` + `Jupiter`/`Galileo`, or the `SteamDeck` env var) and shows what
-> it detected on the confirm screen. Detection only reorders menu defaults —
-> every mod works identically on Deck, Steam Machine, and any Linux PC, and
-> a failed detection simply falls back to the generic defaults.
+> it detected on the confirm screen. Detection selects appropriate menu
+> defaults and applies the Steam Deck-specific high-resolution-texture
+> restriction — nothing else. Every mod works identically on Deck, Steam
+> Machine, and any Linux PC, and a failed detection simply falls back to
+> the generic defaults.
 
 > 🖥️ **Docked / TV:** SteamOS may default a game to 1280×720. Set the game's
 > *Properties → Game Resolution* to **Native** for full quality. Handheld needs
