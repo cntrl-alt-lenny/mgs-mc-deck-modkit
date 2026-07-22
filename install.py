@@ -597,12 +597,29 @@ def install_hdfix(game_dir: Path, tmp: Path, log) -> None:
     log("    ✓ winhttp.dll + wininet.dll + plugins/MGSHDFix.asi")
 
 
+def archive_file_entries(archive: Path) -> list[str]:
+    """All file (non-directory) entries in an archive, via bsdtar."""
+    p = subprocess.run(["bsdtar", "-tf", str(archive)],
+                       capture_output=True, text=True, check=True)
+    return [ln for ln in p.stdout.splitlines() if ln and not ln.endswith("/")]
+
+
 def install_better_audio(game_dir: Path, archives: list[Path], log) -> None:
     for archive in archives:
         log(f"  Installing Better Audio Mod from {archive.name} "
             f"({archive.stat().st_size / 1024**3:.2f} GB) — this takes a while …")
         extract(archive, game_dir)
-    log("    ✓ audio streams replaced")
+        # Verify the payload actually landed — every file entry must exist.
+        entries = archive_file_entries(archive)
+        missing = [e for e in entries if not (game_dir / e).is_file()]
+        if missing:
+            raise RuntimeError(
+                f"Better Audio archive '{archive.name}': {len(missing)} "
+                f"file(s) missing after extraction (e.g. {missing[0]}). "
+                "The archive may be corrupt — re-download it and re-run "
+                "this kit.")
+        log(f"    ✓ {archive.name}: all {len(entries)} files verified "
+            "on disk")
 
 
 def install_m2fix(game_dir: Path, tmp: Path, opts: dict, log) -> None:
@@ -940,10 +957,14 @@ def obtain_audio_archives(g: dict, ui: UI) -> list[Path]:
         name = extra.name.lower()
         if "cutscene" in name or "ending" in name:
             if ui.yesno(
-                f"Optional extra found for {short}:\n\n{extra.name} "
+                f"Optional extra found for {short} (separate from the "
+                f"required Update):\n\n{extra.name} "
                 f"({extra.stat().st_size / 1048576:.0f} MB)\n\n"
-                "Higher-bitrate ending-cutscene audio from the same mod "
-                "page. Install it too?"
+                "Higher-bitrate audio for the game's final two cutscenes, "
+                "from the same mod page. Its author notes a quirk: those "
+                "two cutscenes will PAUSE at the end and need a button "
+                "press (A/X) to continue.\n\n"
+                "Recommended for a first playthrough: No.\n\nInstall it?"
             ):
                 chosen.append(extra)
         else:
@@ -1040,7 +1061,9 @@ def main() -> int:
                 found[key] = (d, next(iter(steam_roots()),
                                       Path.home() / ".local/share/Steam"))
         if not found:
-            ui.error(f"Neither game executable was found in:\n{d}")
+            ui.error("No Master Collection game executable (METAL GEAR "
+                     "SOLID.exe / SOLID2.exe / SOLID3.exe) was found in:\n"
+                     f"{d}")
             return 1
 
     # 2. Which games to process --------------------------------------------

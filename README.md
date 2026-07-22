@@ -43,7 +43,7 @@ In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste
 </td></tr>
 </table>
 
-> **Step 3 is the only manual bit.** Steam silently reverts config edits made
+> **Step 4 is the only manual bit.** Steam silently reverts config edits made
 > while it's running, so no script can do it reliably.
 
 ---
@@ -184,10 +184,16 @@ missing.
 &nbsp;·&nbsp;
 🔊 **[MGS3 Better Audio Mod](https://www.nexusmods.com/metalgearsolid3mc/mods/4)**
 
-Grab the **Full Version** of each (~2–3 GB). The installer makes the rest
-painless: if the archives are already on your machine it finds them
-automatically — Downloads, Desktop, Documents or home — and if they're missing
-it opens the right page for you, then picks the file up afterwards on its own.
+The installer makes the rest painless: if the archives are already on your
+machine it finds them automatically — Downloads, Desktop, Documents or home —
+and if they're missing it opens the right page for you, then picks the file
+up afterwards on its own. After extraction it verifies every audio file
+actually landed on disk.
+
+The optional MGS3 *HQ Ending Cutscenes* archive has one quirk, per its
+author: the final two cutscenes **pause at the end and need a button press
+(A/X) to continue** — which is why the installer recommends skipping it for
+a first playthrough.
 
 Skip it and re-run the kit later any time — it's entirely optional.
 
@@ -234,7 +240,7 @@ slate: `winhttp.dll`, `wininet.dll`, `plugins/`, `logs/`, `steam_appid.txt`.
 MGSHDFix version. Run `MGSHDFix Config Tool.exe` in the game's `plugins/`
 folder and hit *Save and Exit*.
 
-**Mod doesn't load at all** — the launch options aren't set. See step 3.
+**Mod doesn't load at all** — the launch options aren't set. See step 4.
 
 **Want the launcher back?** `plugins/MGSHDFix.settings` → `Skip Launcher=0`.
 
