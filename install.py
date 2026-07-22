@@ -615,12 +615,19 @@ def install_m2fix(game_dir: Path, tmp: Path, opts: dict, log) -> None:
     if missing:
         raise RuntimeError(f"MGSM2Fix extraction failed (missing: "
                            f"{', '.join(missing)})")
+    ini = game_dir / "MGSM2Fix.ini"
+    text = ini.read_text()
     if not opts.get("update_check"):
-        ini = game_dir / "MGSM2Fix.ini"
-        ini.write_text(ini.read_text().replace(
-            "CheckForUpdates = true", "CheckForUpdates = false", 1))
+        text = text.replace("CheckForUpdates = true",
+                            "CheckForUpdates = false", 1)
+    if opts.get("skip_launcher", True):
+        # Safe even on a fresh install: per the author's docs this "boots
+        # the LAST LAUNCHED game version", so until the user has picked a
+        # version once, the selection menu still appears normally.
+        text = text.replace("StartGame = false", "StartGame = true", 1)
+    ini.write_text(text)
     log("    ✓ d3d11.dll + dinput8.dll + MGSM2Fix (vanilla-faithful "
-        "shipped defaults)")
+        "shipped defaults; auto-boots your last-picked version)")
 
 
 def install_bugfix(g: dict, game_dir: Path, tmp: Path, log) -> None:
@@ -1093,8 +1100,9 @@ def main() -> int:
             [("hq_movies", "High-quality cinematics  (set for you — no "
                            "launcher trip needed)", True),
              ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
-             ("skip_launcher", "Skip the Konami launcher and boot straight "
-                               "into the game", True),
+             ("skip_launcher", "Boot straight into the games (skip MGS2/3's "
+                               "Konami launcher; MGS1 re-boots your last-"
+                               "picked version)", True),
              ("update_check", "Check for mod updates on launch", False)],
         )
         for k in ("hq_movies", "skip_splash", "update_check",
@@ -1231,6 +1239,13 @@ def main() -> int:
         "   'Native' (or 1920x1080) for full quality. Handheld needs no\n"
         "   changes; everything renders at native 16:10.\n\n"
         + launcher_note +
+        ("4) MGS1 FIRST BOOT — the version-select menu appears once. Pick\n"
+         "   METAL GEAR SOLID (US) — full-speed 60Hz English; the EU disc\n"
+         "   is 50Hz PAL and runs ~17% slower. In the display options pick\n"
+         "   Max resolution and keep 4:3. After that it boots straight in\n"
+         "   (change versions later via the in-game pause menu).\n\n"
+         if any(GAMES[k].get("kind") == "m2fix" for k in found) else "")
+        +
         "If MGS2/MGS3 ever report a missing config key, run\n"
         "'MGSHDFix Config Tool.exe' in the game's plugins folder and hit\n"
         "'Save and Exit' — that regenerates the settings file.\n\n"

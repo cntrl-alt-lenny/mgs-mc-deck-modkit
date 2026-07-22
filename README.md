@@ -194,6 +194,34 @@ Skip it and re-run the kit later any time — it's entirely optional.
 </details>
 
 <details>
+<summary><b>🕹️ MGS1: first boot & recommended settings</b></summary>
+
+<br>
+
+MGS1's "launcher" is the Master Collection's own **version-select menu**
+(part of the game, unlike MGS2/3's separate Konami launcher). The kit sets
+MGSM2Fix's launcher-skip, which **boots your last-launched version** — so the
+menu appears on first boot for you to choose, then never again. To change
+versions later, use the in-game pause menu.
+
+**What to pick, first time:**
+
+| Setting | Pick | Why |
+|:--|:--|:--|
+| **Game version** | **METAL GEAR SOLID (US)** | Full-speed 60 Hz NTSC in English. The EU release is 50 Hz PAL — it genuinely runs ~17% slower with borders. |
+| Resolution / rendering | **Max** | M2's official internal upscale — sharp, era-authentic 3D, effortless for any modern device. |
+| Screen size / aspect | Normal / Original (4:3) | Vanilla framing (side bars are correct). Never the stretch option. |
+| Smoothing | Off | PS1 hardware had no texture filtering — off is the authentic sharp look. Taste, though. |
+| Scanlines / wallpaper | Off / any | Pure cosmetics. |
+
+MGSM2Fix's shipped defaults (which the kit keeps) already restore the
+original western presentation — the censored Master Collection texture swaps
+(Johnny, mosaic, ghosts, medicine) are all reverted, the analog deadzone is
+removed, and startup notices are skipped.
+
+</details>
+
+<details>
 <summary><b>🧹 Uninstalling & troubleshooting</b></summary>
 
 <br>
