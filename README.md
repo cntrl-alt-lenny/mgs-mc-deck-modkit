@@ -1,8 +1,9 @@
 <div align="center">
 
-# 🐍 MGS Deck Mod Kit
+# 🐍 MGS Mod Kit
 
-### Metal Gear Solid **2** & **3** · Master Collection · Steam Deck
+### Metal Gear Solid **1**, **2** & **3** · Master Collection
+### Steam Deck · Steam Machine · any SteamOS or Linux PC
 
 *One double-click. The whole setup. No guesswork.*
 
@@ -21,7 +22,8 @@
 
 <table>
 <tr><td width="60" align="center"><h3>1</h3></td><td>
-Download <a href="Install-MGS-Mods.desktop"><b><code>Install-MGS-Mods.desktop</code></b></a> and drop it on your Deck's Desktop.
+Download <a href="Install-MGS-Mods.desktop"><b><code>Install-MGS-Mods.desktop</code></b></a> and drop it on your Desktop.<br>
+<sub>KDE blocks downloaded shortcuts until you allow them: <b>right-click → Properties → Permissions → tick "Is executable"</b>.</sub>
 </td></tr>
 <tr><td align="center"><h3>2</h3></td><td>
 <i>(Optional)</i> Grab the <b>Better Audio Mod</b> for each game — just leave the
@@ -35,8 +37,10 @@ files in <code>Downloads</code>, the installer finds them by itself:<br><br>
 <b>Double-click the installer.</b> Answer a few questions. Done.
 </td></tr>
 <tr><td align="center"><h3>4</h3></td><td>
-In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste:<br><br>
-<code>WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%</code>
+In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste
+<b>its</b> line:<br><br>
+<b>MGS2 & MGS3:</b> <code>WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%</code><br>
+<b>MGS1:</b> <code>WINEDLLOVERRIDES="dinput8=n,b;d3d11=n,b" %command%</code>
 </td></tr>
 </table>
 
@@ -49,13 +53,14 @@ In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste:<
 
 |  | |
 |:--|:--|
-| 🖥️ **True 16:10** | Native resolution, correct FOV, no pillarboxing |
+| 🖥️ **True 16:10** | Native resolution, correct FOV, no pillarboxing (MGS2/3) |
 | 🎨 **Restored PS2 assets** | Original textures & full-quality models put back |
 | 🎬 **HQ cinematics** | Enabled for you — no launcher trip needed |
-| 🔊 **Better audio** | Uncompressed PS3-quality sound *(optional)* |
+| 🔊 **Better audio** | Uncompressed PS3-quality sound — also fixes an MGS2 cutscene crash *(strongly recommended)* |
 | 🎮 **Correct buttons** | Steam Deck glyphs instead of keyboard prompts |
 | ⚡ **Straight in** | KONAMI logos and the launcher both skipped |
 | 🔋 **Runs cool** | The high-CPU-usage fix, on by default |
+| 🕹️ **MGS1 fixed too** | MGSM2Fix — analog deadzone removed, original uncensored textures restored, notices skipped |
 
 > 🌿 **Vanilla-faithful by design.** Every mod here is a *fix* or a
 > *restoration*. AI-upscaled texture packs are deliberately **not** included.
@@ -66,9 +71,10 @@ In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste:<
 
 | # | Mod | Author |
 |:-:|:--|:--|
-| 1 | [MGSHDFix](https://github.com/ShizCalev/MGSHDFix) `3.1.0` | ShizCalev · *orig.* Lyall |
-| 2 | Better Audio Mod *(optional)* · [MGS2](https://www.nexusmods.com/metalgearsolid2mc/mods/3) `2.0` / [MGS3](https://www.nexusmods.com/metalgearsolid3mc/mods/4) `2.0` | knight_killer |
+| 1 | [MGSHDFix](https://github.com/ShizCalev/MGSHDFix) `3.1.0` *(MGS2/3)* | ShizCalev · *orig.* Lyall |
+| 2 | Better Audio Mod *(strongly recommended)* · [MGS2](https://www.nexusmods.com/metalgearsolid2mc/mods/3) `2.0` / [MGS3](https://www.nexusmods.com/metalgearsolid3mc/mods/4) `2.0` | knight_killer |
 | 3 | Community Bugfix Compilation — Base · [MGS2](https://github.com/ShizCalev/MGS2-Community-Bugfix-Compilation) `2.2.0` / [MGS3](https://github.com/ShizCalev/MGS3-Community-Bugfix-Compilation) `1.1.0` | ShizCalev |
+| 4 | [MGSM2Fix](https://github.com/nuggslet/MGSM2Fix) `3.6.0` *(MGS1)* | nuggslet |
 
 Installed in that exact order — it's required, and the kit enforces it.
 Everything is fetched live from the authors' official releases; **nothing is
@@ -111,13 +117,21 @@ you get the good cutscenes *and* skip the launcher.
 
 | Option | Default |
 |:--|:--|
-| Button icons | `Steam Deck` — Xbox / PS5 / PS2 / Keyboard also offered |
-| Audio output | `Stereo (2.0)` — pick 5.1 if docked |
+| Button icons | `Steam Deck` — Xbox (Steam Machine / pads), PS5, PS2, Keyboard also offered |
+| Audio output | `Stereo (2.0)` — right for handheld, docked *and* TV speakers. Pick 5.1 **only** with a real surround receiver/speaker setup |
 | High-quality cinematics | **on** |
 | Skip KONAMI intro logos | **on** |
 | Skip the launcher | **on** |
 | MGS3 high-res textures | off |
-| MGSHDFix update checks | off |
+| Mod update checks | off |
+
+> 🖥️ **Docked / TV:** SteamOS may default a game to 1280×720. Set the game's
+> *Properties → Game Resolution* to **Native** for full quality. Handheld needs
+> no changes.
+>
+> 🌍 **Playing in another language?** The kit writes English defaults. Run
+> `MGSHDFix Config Tool.exe` (in the game's `plugins/` folder) once to pick
+> another region/language — MGSHDFix validates the pair and falls back safely.
 
 Everything else stays at MGSHDFix's own defaults, which are already right for
 the Deck.
@@ -129,8 +143,16 @@ the Deck.
 
 <br>
 
+It's **strongly recommended**, not just cosmetic: besides restoring the
+PS3-quality audio, the MGS2 version replaces a corrupted audio file in the
+stock port that can freeze or crash a late-game cutscene (MGSHDFix itself
+checks for this fix and warns when it's absent).
+
 It lives on NexusMods, which requires a free login, and **the author does not
-permit it being mirrored** — so this kit will never host or auto-fetch it.
+permit it being mirrored** — that's the primary reason this kit will never
+host or auto-fetch it (the 2–3 GB files also exceed GitHub's 2 GB release
+limit). The installer checks the version in the downloaded filename and warns
+if a newer release exists on Nexus.
 
 🔊 **[MGS2 Better Audio Mod](https://www.nexusmods.com/metalgearsolid2mc/mods/3)**
 &nbsp;·&nbsp;

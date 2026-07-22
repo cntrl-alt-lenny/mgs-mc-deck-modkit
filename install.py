@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-Metal Gear Solid 2 & 3 (Master Collection) — Steam Deck Mod Kit
-===============================================================
+Metal Gear Solid 1, 2 & 3 (Master Collection) — Steam Deck & SteamOS Mod Kit
+============================================================================
 A guided, dependency-free installer for the "essential" vanilla-faithful mod
-stack on the Steam Deck (and any Linux Steam install).
+stack on the Steam Deck, Steam Machine, and any SteamOS / Linux Steam install.
 
 It will:
-  1. Auto-detect your MGS2 / MGS3 Master Collection installs (incl. microSD).
-  2. Install MGSHDFix (resolution / 16:10 / FOV / CPU fixes) — REQUIRED.
-  3. Install the Community Bugfix Compilation (Base) — restores the original
-     PS2 textures/models and fixes the port's broken assets.
-  4. Optionally install the Better Audio Mod from a zip you supply (it lives on
-     NexusMods, which requires a login, so it cannot be fetched automatically).
-  5. Write a KNOWN-GOOD MGSHDFix.settings file, tuned for the Deck.
-  6. Set the Konami launcher's own options for you — including "high quality
-     cinematics" — so the launcher can be skipped entirely.
+  1. Auto-detect your MGS1 / MGS2 / MGS3 Master Collection installs
+     (incl. microSD and secondary libraries).
+  2. MGS2/MGS3: install MGSHDFix (resolution / 16:10 / FOV / CPU fixes).
+  3. MGS2/MGS3: install the Community Bugfix Compilation (Base) — restores the
+     original PS2 textures/models and fixes the port's broken assets.
+  4. MGS2/MGS3: optionally install the Better Audio Mod from a zip you supply
+     (it lives on NexusMods, which requires a login, so it cannot be fetched
+     automatically).
+  5. MGS2/MGS3: write a KNOWN-GOOD MGSHDFix.settings file.
+  6. MGS2/MGS3: set the Konami launcher's own options — including "high
+     quality cinematics" — so the launcher can be skipped entirely.
+  7. MGS1: install MGSM2Fix (M2-emulator fix: analog deadzone removal,
+     censored-texture restorations, skippable notices, custom resolution).
 
 Steps 5 and 6 are the whole reason this kit exists. MGSHDFix has no runtime defaults:
 without a complete settings file it refuses to boot, and it hard-aborts on any
@@ -66,6 +70,16 @@ HDFIX_URL = (
     f"{HDFIX_VERSION}/MGSHDFix_{HDFIX_VERSION}.zip"
 )
 
+# MGS1 (M2 emulator) fix — nuggslet's MGSM2Fix. Ships its own MGSM2Fix.ini
+# whose defaults are already vanilla-faithful (censored-texture restorations
+# on, analog deadzone removal, notice-skip), so we install it as-is.
+M2FIX_VERSION = "3.6.0"
+M2FIX_TAG = "v3.6"
+M2FIX_URL = (
+    "https://github.com/nuggslet/MGSM2Fix/releases/download/"
+    f"{M2FIX_TAG}/MGSM2Fix_{M2FIX_VERSION}.zip"
+)
+
 GAMES = {
     "mgs2": {
         "key": "mgs2",
@@ -102,9 +116,27 @@ GAMES = {
         "bugfix_asi": "MGS3-Community-Bugfix-Compilation.asi",
         "audio_page": "https://www.nexusmods.com/metalgearsolid3mc/mods/4",
     },
+    "mgs1": {
+        "key": "mgs1",
+        "kind": "m2fix",
+        "name": "Metal Gear Solid (1)",
+        "short": "MGS1",
+        "appid": "2131630",
+        "dirname": "MGS1",
+        "exe": "METAL GEAR SOLID.exe",
+        "launch": 'WINEDLLOVERRIDES="dinput8=n,b;d3d11=n,b" %command%',
+    },
 }
 
 LAUNCH_OPTIONS = 'WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%'
+
+# Advisory freshness check for the Better Audio archives (July 2026). Nexus
+# filenames end in -<modid>-<major>-<minor>-<timestamp>.<ext>. This only
+# produces a WARNING if the user's file is older — never a hard block, so a
+# stale entry here can't strand anyone.
+AUDIO_CURRENT = {"MGS2": (2, 0), "MGS3": (2, 0)}
+NEXUS_SUFFIX = re.compile(r"-(\d+)-(\d+)-(\d+)-(\d{9,11})\.(?:zip|7z|rar)$",
+                          re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Canonical MGSHDFix.settings (MGSHDFix 3.1.0).
@@ -527,11 +559,30 @@ def install_hdfix(game_dir: Path, tmp: Path, log) -> None:
     log("    ✓ winhttp.dll + wininet.dll + plugins/MGSHDFix.asi")
 
 
-def install_better_audio(game_dir: Path, archive: Path, log) -> None:
-    log(f"  Installing Better Audio Mod from {archive.name} "
-        f"({archive.stat().st_size / 1024**3:.2f} GB) — this takes a while …")
-    extract(archive, game_dir)
+def install_better_audio(game_dir: Path, archives: list[Path], log) -> None:
+    for archive in archives:
+        log(f"  Installing Better Audio Mod from {archive.name} "
+            f"({archive.stat().st_size / 1024**3:.2f} GB) — this takes a while …")
+        extract(archive, game_dir)
     log("    ✓ audio streams replaced")
+
+
+def install_m2fix(game_dir: Path, tmp: Path, opts: dict, log) -> None:
+    log(f"  Installing MGSM2Fix {M2FIX_VERSION} …")
+    zp = tmp / f"MGSM2Fix_{M2FIX_VERSION}.zip"
+    download(M2FIX_URL, zp, log)
+    extract(zp, game_dir)
+    missing = [n for n in ("d3d11.dll", "dinput8.dll", "MGSM2Fix64.asi",
+                           "MGSM2Fix.ini") if not (game_dir / n).is_file()]
+    if missing:
+        raise RuntimeError(f"MGSM2Fix extraction failed (missing: "
+                           f"{', '.join(missing)})")
+    if not opts.get("update_check"):
+        ini = game_dir / "MGSM2Fix.ini"
+        ini.write_text(ini.read_text().replace(
+            "CheckForUpdates = true", "CheckForUpdates = false", 1))
+    log("    ✓ d3d11.dll + dinput8.dll + MGSM2Fix (vanilla-faithful "
+        "shipped defaults)")
 
 
 def install_bugfix(g: dict, game_dir: Path, tmp: Path, log) -> None:
@@ -654,6 +705,10 @@ def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
 
 def verify_install(g: dict, game_dir: Path) -> list[str]:
     """Return a list of human-readable problems (empty == all good)."""
+    if g.get("kind", "hdfix") == "m2fix":
+        return [f"missing {rel}" for rel in
+                ("d3d11.dll", "dinput8.dll", "MGSM2Fix64.asi", "MGSM2Fix.ini")
+                if not (game_dir / rel).is_file()]
     problems = []
     for rel in ("winhttp.dll", "wininet.dll",
                 "plugins/MGSHDFix.asi", "plugins/MGSHDFix.settings"):
@@ -668,29 +723,51 @@ def verify_install(g: dict, game_dir: Path) -> list[str]:
 # Better Audio Mod: NexusMods requires a login, so we cannot fetch it.
 # Try to find an already-downloaded archive, else let the user point at one.
 # ---------------------------------------------------------------------------
-MIN_AUDIO_BYTES = 500 * 1024 * 1024  # the real mods are 2-3 GB; ignore stubs
+MIN_AUDIO_BYTES = 500 * 1024 * 1024   # a Full Version is 2-3 GB
+MIN_UPDATE_BYTES = 5 * 1024 * 1024    # small patch/update archives are fine
 
 
-def guess_audio_archive(short: str) -> Path | None:
-    """Find an already-downloaded Better Audio archive, newest first."""
+def scan_audio_archives(short: str) -> list[Path]:
+    """All plausible Better Audio archives for this game, any size."""
     pats = [f"*{short}*Better*Audio*", f"*Better*Audio*{short}*",
             f"*{short}*BetterAudio*", f"*{short}MC*Audio*"]
     exts = {".zip", ".7z", ".rar"}
     roots = [Path.home() / "Downloads", Path.home() / "Desktop",
              Path.home() / "Documents", Path.home()]
-    hits: list[Path] = []
+    hits: set[Path] = set()
     for root in roots:
         if not root.is_dir():
             continue
         for pat in pats:
             for p in root.glob(pat):
                 if (p.is_file() and p.suffix.lower() in exts
-                        and p.stat().st_size >= MIN_AUDIO_BYTES):
-                    hits.append(p)
-    if not hits:
-        return None
-    # newest wins — most likely the one just downloaded
-    return max(set(hits), key=lambda p: p.stat().st_mtime)
+                        and p.stat().st_size >= MIN_UPDATE_BYTES):
+                    hits.add(p)
+    return sorted(hits, key=lambda p: p.stat().st_mtime)
+
+
+def guess_audio_archive(short: str) -> Path | None:
+    """Newest full-size Better Audio archive, or None."""
+    full = [p for p in scan_audio_archives(short)
+            if p.stat().st_size >= MIN_AUDIO_BYTES]
+    return full[-1] if full else None
+
+
+def audio_version(path: Path) -> tuple[int, int] | None:
+    """Parse (major, minor) from a NexusMods download filename."""
+    m = NEXUS_SUFFIX.search(path.name)
+    return (int(m.group(2)), int(m.group(3))) if m else None
+
+
+def probe_audio_archive(path: Path) -> bool:
+    """Cheap sanity check that this really is an MGS audio mod archive."""
+    p = subprocess.run(["bsdtar", "-tf", str(path)],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        return False
+    names = p.stdout.lower()
+    return ("us/" in names or ".sdt" in names or ".sdx" in names
+            or ".xxs" in names)
 
 
 def open_url(url: str) -> bool:
@@ -704,8 +781,8 @@ def open_url(url: str) -> bool:
         return False
 
 
-def obtain_audio_archive(g: dict, ui: UI) -> Path | None:
-    """Locate the Better Audio archive, walking the user through it if needed.
+def obtain_audio_archives(g: dict, ui: UI) -> list[Path]:
+    """Locate the Better Audio archive(s), walking the user through it.
 
     NexusMods requires a logged-in account to download, and the mod author
     does not permit the files being mirrored elsewhere — so this kit will
@@ -713,32 +790,66 @@ def obtain_audio_archive(g: dict, ui: UI) -> Path | None:
     as possible instead: open the page, then pick the download up
     automatically from wherever the browser put it.
     """
-    arc = guess_audio_archive(g["short"])
+    short = g["short"]
+    arc = guess_audio_archive(short)
     if arc is None:
         if ui.yesno(
-            f"No {g['short']} Better Audio archive found on this machine.\n\n"
+            f"No {short} Better Audio archive found on this machine.\n\n"
             "It's hosted on NexusMods, which needs a (free) login, and the "
             "author doesn't allow it to be mirrored — so it can't be "
             "downloaded automatically.\n\n"
             f"Open the page now?\n{g['audio_page']}\n\n"
-            f"(Grab the FULL VERSION. Choosing No skips {g['short']} audio.)"
+            f"(Grab the FULL VERSION. Choosing No skips {short} audio.)"
         ):
             if not open_url(g["audio_page"]):
                 ui.info(f"Couldn't open a browser. Visit:\n{g['audio_page']}")
             ui.info(
-                f"Download the {g['short']} Better Audio Mod (Full Version),\n"
+                f"Download the {short} Better Audio Mod (Full Version),\n"
                 "then click OK here.\n\n"
                 "I'll pick it up from your Downloads folder automatically —\n"
                 "no need to tell me where it is.")
-            arc = guess_audio_archive(g["short"])
+            arc = guess_audio_archive(short)
 
-    if arc and ui.yesno(f"Use this for {g['short']}?\n\n{arc}\n"
-                        f"({arc.stat().st_size / 1024**3:.2f} GB)"):
-        return arc
+    # Freshness: warn (never block) if the filename says it's an old version.
+    ver = audio_version(arc) if arc else None
+    cur = AUDIO_CURRENT.get(short)
+    if arc and ver and cur and ver < cur:
+        if ui.yesno(
+            f"Heads up: this {short} archive is version {ver[0]}.{ver[1]}, "
+            f"but at least {cur[0]}.{cur[1]} exists on NexusMods:\n\n"
+            f"{arc.name}\n\n"
+            f"Open the page to download the current version instead?\n"
+            f"(No = install {ver[0]}.{ver[1]} anyway)"
+        ):
+            open_url(g["audio_page"])
+            ui.info("Download the current Full Version, then click OK here.")
+            arc = guess_audio_archive(short) or arc
 
-    sel = ui.pick_file(f"Select the {g['short']} Better Audio archive "
-                       f"(Cancel to skip {g['short']})")
-    return Path(sel) if sel else None
+    if not (arc and ui.yesno(f"Use this for {short}?\n\n{arc}\n"
+                             f"({arc.stat().st_size / 1024**3:.2f} GB)")):
+        sel = ui.pick_file(f"Select the {short} Better Audio archive "
+                           f"(Cancel to skip {short})")
+        if not sel:
+            return []
+        arc = Path(sel)
+
+    if not probe_audio_archive(arc):
+        if not ui.yesno(
+            f"WARNING: {arc.name} doesn't look like an MGS audio mod "
+            "archive (no us/ folder or .sdt/.sdx/.xxs files inside).\n\n"
+            "Install it anyway?"
+        ):
+            return []
+
+    # Any smaller matching archives newer than the full one are treated as
+    # official patch/update files and layered on top, oldest first.
+    chosen = [arc]
+    for extra in scan_audio_archives(short):
+        if (extra != arc and extra.stat().st_size < MIN_AUDIO_BYTES
+                and extra.stat().st_mtime >= arc.stat().st_mtime
+                and probe_audio_archive(extra)):
+            chosen.append(extra)
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -822,78 +933,92 @@ def main() -> int:
             return 1
         found = {k: v for k, v in found.items() if k in picks}
 
-    # 3. Options ------------------------------------------------------------
-    icons = ui.menu(
-        "Controller Button Icons",
-        "Which button prompts should the games show?",
-        [("Steam Deck", "Steam Deck — matches the Deck's physical buttons"),
-         ("Xbox One", "Xbox — for an Xbox-style pad"),
-         ("PlayStation 5", "PlayStation 5 — for a DualSense"),
-         ("PlayStation 2", "PlayStation 2 — authentic, restored by the Bugfix mod"),
-         ("Keyboard / Mouse", "Keyboard / Mouse")],
-    ) or "Steam Deck"
-
-    audio = ui.menu(
-        "Audio Output",
-        "How are you listening?",
-        [("Stereo (2.0)", "Stereo — handheld speakers / headphones (Deck default)"),
-         ("Surround Sound (5.1)", "5.1 Surround — docked to a receiver/TV")],
-    ) or "Stereo (2.0)"
-
-    extras = ui.checklist(
-        "Extra Options", "Optional tweaks (recommended defaults shown):",
-        [("hq_movies", "High-quality cinematics  (set for you — no launcher "
-                       "trip needed)", True),
-         ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
-         ("skip_launcher", "Skip the Konami launcher and boot straight into "
-                           "the game", True),
-         ("hq_textures", "MGS3 only: high-resolution textures", False),
-         ("update_check", "Check for MGSHDFix updates on launch", False)],
-    )
+    # 3. Options (only relevant to the MGSHDFix games) -----------------------
+    hdfix_sel = [k for k in found if GAMES[k].get("kind", "hdfix") == "hdfix"]
     opts = {
-        "button_icons": icons,
-        "audio_mode": audio,
-        "hq_movies": "hq_movies" in extras,
-        "hq_textures": "hq_textures" in extras,
-        "skip_splash": "skip_splash" in extras,
-        "update_check": "update_check" in extras,
-        "skip_launcher": "skip_launcher" in extras,
+        "button_icons": "Steam Deck", "audio_mode": "Stereo (2.0)",
+        "hq_movies": True, "hq_textures": False, "skip_splash": True,
+        "update_check": False, "skip_launcher": True,
     }
+    if hdfix_sel:
+        opts["button_icons"] = ui.menu(
+            "Controller Button Icons",
+            "Which button prompts should MGS2/MGS3 show?",
+            [("Steam Deck", "Steam Deck — matches the Deck's physical buttons"),
+             ("Xbox One", "Xbox — Steam Machine / Xbox-style pads"),
+             ("PlayStation 5", "PlayStation 5 — for a DualSense"),
+             ("PlayStation 2", "PlayStation 2 — authentic, restored by the Bugfix mod"),
+             ("Keyboard / Mouse", "Keyboard / Mouse")],
+        ) or "Steam Deck"
 
-    # 4. Better Audio Mod (manual archive) ----------------------------------
-    audio_archives: dict[str, Path] = {}
-    if ui.yesno(
-        "Install the Better Audio Mod?\n\n"
+        opts["audio_mode"] = ui.menu(
+            "Audio Output",
+            "How are you listening?",
+            [("Stereo (2.0)", "Stereo — handheld, headphones, TV speakers "
+                              "(right for most setups, incl. docked)"),
+             ("Surround Sound (5.1)", "5.1 Surround — ONLY with a real "
+                                      "surround receiver / speaker setup")],
+        ) or "Stereo (2.0)"
+
+        extras = ui.checklist(
+            "Extra Options", "Optional tweaks (recommended defaults shown):",
+            [("hq_movies", "High-quality cinematics  (set for you — no "
+                           "launcher trip needed)", True),
+             ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
+             ("skip_launcher", "Skip the Konami launcher and boot straight "
+                               "into the game", True),
+             ("hq_textures", "MGS3 only: high-resolution textures", False),
+             ("update_check", "Check for mod updates on launch", False)],
+        )
+        for k in ("hq_movies", "hq_textures", "skip_splash", "update_check",
+                  "skip_launcher"):
+            opts[k] = k in extras
+
+    # 4. Better Audio Mod (manual archive, MGS2/MGS3 only) -------------------
+    audio_archives: dict[str, list[Path]] = {}
+    if hdfix_sel and ui.yesno(
+        "Install the Better Audio Mod? (STRONGLY recommended)\n\n"
         "It restores the higher-quality audio the port shipped re-compressed "
-        "(ported from the PS3 HD Collection) — cutscenes and codec calls.\n\n"
+        "(ported from the PS3 HD Collection) — cutscenes and codec calls.\n"
+        "For MGS2 it also replaces a corrupted audio file that can freeze "
+        "or crash a late-game cutscene.\n\n"
         "About 2-3 GB per game. If it's already downloaded I'll find it; "
         "otherwise I'll open the download page for you.\n\n"
         "Install it? (No = skip; you can re-run this kit any time)"
     ):
-        for key in found:
-            arc = obtain_audio_archive(GAMES[key], ui)
-            if arc:
-                audio_archives[key] = arc
+        for key in hdfix_sel:
+            arcs = obtain_audio_archives(GAMES[key], ui)
+            if arcs:
+                audio_archives[key] = arcs
 
     # 5. Confirm ------------------------------------------------------------
     plan = []
     for key in found:
         g, (d, _) = GAMES[key], found[key]
-        bits = [f"MGSHDFix {HDFIX_VERSION}"]
-        if key in audio_archives:
-            bits.append("Better Audio Mod")
-        bits.append(f"Bugfix Compilation {g['bugfix_version']} (Base)")
-        bits.append("tuned MGSHDFix.settings")
+        if g.get("kind", "hdfix") == "m2fix":
+            bits = [f"MGSM2Fix {M2FIX_VERSION} (vanilla defaults)"]
+        else:
+            bits = [f"MGSHDFix {HDFIX_VERSION}"]
+            if key in audio_archives:
+                n = len(audio_archives[key])
+                bits.append("Better Audio Mod"
+                            + (f" ({n} archives)" if n > 1 else ""))
+            bits.append(f"Bugfix Compilation {g['bugfix_version']} (Base)")
+            bits.append("tuned MGSHDFix.settings")
         plan.append(f"• {g['short']}  →  {d}\n    {' + '.join(bits)}")
 
     target_dir = next(iter(found.values()))[0]
+    summary = f"Free space: {free_gb(target_dir):.0f} GB\n\n"
+    if hdfix_sel:
+        summary = (
+            f"Button icons: {opts['button_icons']}    "
+            f"Audio: {opts['audio_mode']}\n"
+            f"Skip logos: {'yes' if opts['skip_splash'] else 'no'}    "
+            f"Skip launcher: {'yes' if opts['skip_launcher'] else 'no'}\n\n"
+            + summary)
     if not ui.yesno(
-        "Ready to install:\n\n" + "\n".join(plan) + "\n\n"
-        f"Button icons: {icons}    Audio: {audio}\n"
-        f"Skip logos: {'yes' if opts['skip_splash'] else 'no'}    "
-        f"Skip launcher: {'yes' if opts['skip_launcher'] else 'no'}\n\n"
-        f"Free space: {free_gb(target_dir):.0f} GB\n\n"
-        "Make sure BOTH GAMES AND STEAM'S DOWNLOADS ARE CLOSED. Proceed?"
+        "Ready to install:\n\n" + "\n".join(plan) + "\n\n" + summary +
+        "Make sure THE GAMES AND STEAM'S DOWNLOADS ARE CLOSED. Proceed?"
     ):
         return 0
 
@@ -904,12 +1029,16 @@ def main() -> int:
             for key in found:
                 g, (game_dir, sroot) = GAMES[key], found[key]
                 log(f"\n=== {g['name']} ===")
-                install_hdfix(game_dir, tmp, log)            # 1
-                if key in audio_archives:                    # 2
-                    install_better_audio(game_dir, audio_archives[key], log)
-                install_bugfix(g, game_dir, tmp, log)        # 3
-                write_settings(game_dir, g, opts, log)
-                set_launcher_options(game_dir, g, sroot, opts, log)
+                if g.get("kind", "hdfix") == "m2fix":
+                    install_m2fix(game_dir, tmp, opts, log)
+                else:
+                    install_hdfix(game_dir, tmp, log)        # 1
+                    if key in audio_archives:                # 2
+                        install_better_audio(game_dir,
+                                             audio_archives[key], log)
+                    install_bugfix(g, game_dir, tmp, log)    # 3
+                    write_settings(game_dir, g, opts, log)
+                    set_launcher_options(game_dir, g, sroot, opts, log)
                 for f in tmp.glob("*.zip"):
                     f.unlink(missing_ok=True)
     except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError,
@@ -933,31 +1062,47 @@ def main() -> int:
 
     # 8. Final manual steps -------------------------------------------------
     names = ", ".join(GAMES[k]["short"] for k in found)
-    launcher_note = (
-        "3) The Konami launcher is SKIPPED — the games boot straight in.\n"
-        f"   High-quality cinematics: {'ON' if opts['hq_movies'] else 'off'} "
-        "(already applied for you).\n"
-        "   Need the launcher back? Edit plugins/MGSHDFix.settings →\n"
-        "   Skip Launcher=0\n\n"
-        if opts["skip_launcher"] else
-        "3) The Konami launcher will still appear on launch. Its options\n"
-        f"   are already set for you (high-quality cinematics: "
-        f"{'ON' if opts['hq_movies'] else 'off'}), so you can just hit Play.\n"
-        "   To skip it entirely, edit plugins/MGSHDFix.settings →\n"
-        "   Skip Launcher=1\n\n"
-    )
+    lo_lines = []
+    if hdfix_sel:
+        lo_lines.append("   "
+                        + " & ".join(GAMES[k]["short"] for k in hdfix_sel)
+                        + f":  {LAUNCH_OPTIONS}")
+    for key in found:
+        if GAMES[key].get("kind") == "m2fix":
+            lo_lines.append(f"   {GAMES[key]['short']}:  "
+                            f"{GAMES[key]['launch']}")
+    launcher_note = ""
+    if hdfix_sel:
+        launcher_note = (
+            "3) The Konami launcher is SKIPPED — MGS2/MGS3 boot straight "
+            "in.\n"
+            f"   High-quality cinematics: "
+            f"{'ON' if opts['hq_movies'] else 'off'} (already applied).\n"
+            "   Need the launcher back? Edit plugins/MGSHDFix.settings →\n"
+            "   Skip Launcher=0\n\n"
+            if opts["skip_launcher"] else
+            "3) The Konami launcher will still appear on launch. Its "
+            "options\n"
+            f"   are already set for you (high-quality cinematics: "
+            f"{'ON' if opts['hq_movies'] else 'off'}), so just hit Play.\n"
+            "   To skip it entirely, edit plugins/MGSHDFix.settings →\n"
+            "   Skip Launcher=1\n\n"
+        )
     ui.info(
         f"✅ Done — {names} modded and verified!\n\n"
         "ONE manual step remains (Steam reverts script-made edits, so this\n"
         "must be done in Steam's UI):\n\n"
         "1) LAUNCH OPTIONS — for EACH game, right-click it in Steam →\n"
-        "   Properties → General → Launch Options, and paste EXACTLY:\n\n"
-        f"   {LAUNCH_OPTIONS}\n\n"
-        "   Without this, MGSHDFix will not load at all.\n\n"
-        "2) Play in whatever mode you like — handheld Game Mode is fully\n"
-        "   supported; the games render at your native 16:10 resolution.\n\n"
+        "   Properties → General → Launch Options, and paste EXACTLY\n"
+        "   (note they differ per game):\n\n"
+        + "\n".join(lo_lines) + "\n\n"
+        "   Without this, the fix mods will not load at all.\n\n"
+        "2) Playing docked / on a TV? SteamOS may default the game to\n"
+        "   1280x720 — set Properties → General → Game Resolution to\n"
+        "   'Native' (or 1920x1080) for full quality. Handheld needs no\n"
+        "   changes; everything renders at native 16:10.\n\n"
         + launcher_note +
-        "If a game ever reports a missing config key, run\n"
+        "If MGS2/MGS3 ever report a missing config key, run\n"
         "'MGSHDFix Config Tool.exe' in the game's plugins folder and hit\n"
         "'Save and Exit' — that regenerates the settings file.\n\n"
         "You Enjoy All Weapons And Equipment From The Start Of The Game!"

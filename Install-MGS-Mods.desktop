@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Install MGS2 & MGS3 Deck Mods
-Comment=One-click MGSHDFix + Community Bugfix Compilation for Metal Gear Solid 2 & 3 Master Collection
+Name=Install MGS Master Collection Mods
+Comment=One-click vanilla-faithful mod setup for MGS1, MGS2 & MGS3 Master Collection on Steam Deck / SteamOS
 Icon=applications-games
 Terminal=true
 Exec=bash -c 'curl -fsSL "https://raw.githubusercontent.com/cntrl-alt-lenny/mgs-mc-deck-modkit/main/install.py" -o /tmp/mgs_install.py && python3 /tmp/mgs_install.py --desktop "%k" || { echo; echo "Something went wrong — press Enter to close."; read; }'
