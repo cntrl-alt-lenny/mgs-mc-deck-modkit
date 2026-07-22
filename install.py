@@ -668,19 +668,77 @@ def verify_install(g: dict, game_dir: Path) -> list[str]:
 # Better Audio Mod: NexusMods requires a login, so we cannot fetch it.
 # Try to find an already-downloaded archive, else let the user point at one.
 # ---------------------------------------------------------------------------
+MIN_AUDIO_BYTES = 500 * 1024 * 1024  # the real mods are 2-3 GB; ignore stubs
+
+
 def guess_audio_archive(short: str) -> Path | None:
-    pats = [f"*{short}*Better*Audio*.zip", f"*Better*Audio*{short}*.zip",
-            f"*{short}*BetterAudio*.zip"]
-    roots = [Path.home() / "Downloads", Path.home() / "Desktop", Path.home()]
+    """Find an already-downloaded Better Audio archive, newest first."""
+    pats = [f"*{short}*Better*Audio*", f"*Better*Audio*{short}*",
+            f"*{short}*BetterAudio*", f"*{short}MC*Audio*"]
+    exts = {".zip", ".7z", ".rar"}
+    roots = [Path.home() / "Downloads", Path.home() / "Desktop",
+             Path.home() / "Documents", Path.home()]
+    hits: list[Path] = []
     for root in roots:
         if not root.is_dir():
             continue
         for pat in pats:
-            hits = sorted(root.glob(pat), key=lambda p: p.stat().st_size,
-                          reverse=True)
-            if hits:
-                return hits[0]
-    return None
+            for p in root.glob(pat):
+                if (p.is_file() and p.suffix.lower() in exts
+                        and p.stat().st_size >= MIN_AUDIO_BYTES):
+                    hits.append(p)
+    if not hits:
+        return None
+    # newest wins — most likely the one just downloaded
+    return max(set(hits), key=lambda p: p.stat().st_mtime)
+
+
+def open_url(url: str) -> bool:
+    if not shutil.which("xdg-open"):
+        return False
+    try:
+        subprocess.Popen(["xdg-open", url],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
+def obtain_audio_archive(g: dict, ui: UI) -> Path | None:
+    """Locate the Better Audio archive, walking the user through it if needed.
+
+    NexusMods requires a logged-in account to download, and the mod author
+    does not permit the files being mirrored elsewhere — so this kit will
+    never host or fetch them directly. We make the manual step as painless
+    as possible instead: open the page, then pick the download up
+    automatically from wherever the browser put it.
+    """
+    arc = guess_audio_archive(g["short"])
+    if arc is None:
+        if ui.yesno(
+            f"No {g['short']} Better Audio archive found on this machine.\n\n"
+            "It's hosted on NexusMods, which needs a (free) login, and the "
+            "author doesn't allow it to be mirrored — so it can't be "
+            "downloaded automatically.\n\n"
+            f"Open the page now?\n{g['audio_page']}\n\n"
+            f"(Grab the FULL VERSION. Choosing No skips {g['short']} audio.)"
+        ):
+            if not open_url(g["audio_page"]):
+                ui.info(f"Couldn't open a browser. Visit:\n{g['audio_page']}")
+            ui.info(
+                f"Download the {g['short']} Better Audio Mod (Full Version),\n"
+                "then click OK here.\n\n"
+                "I'll pick it up from your Downloads folder automatically —\n"
+                "no need to tell me where it is.")
+            arc = guess_audio_archive(g["short"])
+
+    if arc and ui.yesno(f"Use this for {g['short']}?\n\n{arc}\n"
+                        f"({arc.stat().st_size / 1024**3:.2f} GB)"):
+        return arc
+
+    sel = ui.pick_file(f"Select the {g['short']} Better Audio archive "
+                       f"(Cancel to skip {g['short']})")
+    return Path(sel) if sel else None
 
 
 # ---------------------------------------------------------------------------
@@ -806,26 +864,16 @@ def main() -> int:
     audio_archives: dict[str, Path] = {}
     if ui.yesno(
         "Install the Better Audio Mod?\n\n"
-        "It restores higher-quality audio the port shipped re-compressed.\n\n"
-        "It's hosted on NexusMods, which requires a login, so this kit CANNOT "
-        "download it for you. If you've already downloaded the zip(s), say Yes "
-        "and point at them.\n\n"
-        "Pages:\n"
-        f"  MGS2: {GAMES['mgs2']['audio_page']}\n"
-        f"  MGS3: {GAMES['mgs3']['audio_page']}\n\n"
-        "Install it now? (No = skip, you can re-run this kit later)"
+        "It restores the higher-quality audio the port shipped re-compressed "
+        "(ported from the PS3 HD Collection) — cutscenes and codec calls.\n\n"
+        "About 2-3 GB per game. If it's already downloaded I'll find it; "
+        "otherwise I'll open the download page for you.\n\n"
+        "Install it? (No = skip; you can re-run this kit any time)"
     ):
         for key in found:
-            g = GAMES[key]
-            guess = guess_audio_archive(g["short"])
-            if guess and ui.yesno(f"Found a likely {g['short']} Better Audio "
-                                  f"archive:\n\n{guess}\n\nUse this?"):
-                audio_archives[key] = guess
-                continue
-            sel = ui.pick_file(f"Select the {g['short']} Better Audio archive "
-                               f"(Cancel to skip {g['short']})")
-            if sel:
-                audio_archives[key] = Path(sel)
+            arc = obtain_audio_archive(GAMES[key], ui)
+            if arc:
+                audio_archives[key] = arc
 
     # 5. Confirm ------------------------------------------------------------
     plan = []
