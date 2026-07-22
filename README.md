@@ -24,9 +24,17 @@
 Download <a href="Install-MGS-Mods.desktop"><b><code>Install-MGS-Mods.desktop</code></b></a> and drop it on your Deck's Desktop.
 </td></tr>
 <tr><td align="center"><h3>2</h3></td><td>
-<b>Double-click it.</b> Answer a few questions. Done.
+<i>(Optional)</i> Grab the <b>Better Audio Mod</b> for each game — just leave the
+files in <code>Downloads</code>, the installer finds them by itself:<br><br>
+🔊 <a href="https://www.nexusmods.com/metalgearsolid2mc/mods/3"><b>MGS2 Better Audio</b></a>
+&nbsp;·&nbsp;
+🔊 <a href="https://www.nexusmods.com/metalgearsolid3mc/mods/4"><b>MGS3 Better Audio</b></a>
+<br><br><sub>Free Nexus login required — grab the <b>Full Version</b>. Skip this and the installer will offer to open the pages for you.</sub>
 </td></tr>
 <tr><td align="center"><h3>3</h3></td><td>
+<b>Double-click the installer.</b> Answer a few questions. Done.
+</td></tr>
+<tr><td align="center"><h3>4</h3></td><td>
 In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste:<br><br>
 <code>WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%</code>
 </td></tr>
@@ -59,7 +67,7 @@ In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste:<
 | # | Mod | Author |
 |:-:|:--|:--|
 | 1 | [MGSHDFix](https://github.com/ShizCalev/MGSHDFix) `3.1.0` | ShizCalev · *orig.* Lyall |
-| 2 | [Better Audio Mod](https://www.nexusmods.com/metalgearsolid2mc/mods/3) *(optional)* | knight_killer |
+| 2 | Better Audio Mod *(optional)* · [MGS2](https://www.nexusmods.com/metalgearsolid2mc/mods/3) `2.0` / [MGS3](https://www.nexusmods.com/metalgearsolid3mc/mods/4) `2.0` | knight_killer |
 | 3 | Community Bugfix Compilation — Base · [MGS2](https://github.com/ShizCalev/MGS2-Community-Bugfix-Compilation) `2.2.0` / [MGS3](https://github.com/ShizCalev/MGS3-Community-Bugfix-Compilation) `1.1.0` | ShizCalev |
 
 Installed in that exact order — it's required, and the kit enforces it.
@@ -124,9 +132,14 @@ the Deck.
 It lives on NexusMods, which requires a free login, and **the author does not
 permit it being mirrored** — so this kit will never host or auto-fetch it.
 
-The installer makes it painless instead: if the archive is already on your
-machine it finds it automatically; if not, it opens the download page and then
-picks the file up from your Downloads folder on its own.
+🔊 **[MGS2 Better Audio Mod](https://www.nexusmods.com/metalgearsolid2mc/mods/3)**
+&nbsp;·&nbsp;
+🔊 **[MGS3 Better Audio Mod](https://www.nexusmods.com/metalgearsolid3mc/mods/4)**
+
+Grab the **Full Version** of each (~2–3 GB). The installer makes the rest
+painless: if the archives are already on your machine it finds them
+automatically — Downloads, Desktop, Documents or home — and if they're missing
+it opens the right page for you, then picks the file up afterwards on its own.
 
 Skip it and re-run the kit later any time — it's entirely optional.
 
