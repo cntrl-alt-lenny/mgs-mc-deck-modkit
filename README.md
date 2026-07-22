@@ -26,12 +26,11 @@ Download <a href="Install-MGS-Mods.desktop"><b><code>Install-MGS-Mods.desktop</c
 <sub>KDE blocks downloaded shortcuts until you allow them: <b>right-click → Properties → Permissions → tick "Is executable"</b>.</sub>
 </td></tr>
 <tr><td align="center"><h3>2</h3></td><td>
-<i>(Optional)</i> Grab the <b>Better Audio Mod</b> for each game — just leave the
-files in <code>Downloads</code>, the installer finds them by itself:<br><br>
-🔊 <a href="https://www.nexusmods.com/metalgearsolid2mc/mods/3"><b>MGS2 Better Audio</b></a>
-&nbsp;·&nbsp;
-🔊 <a href="https://www.nexusmods.com/metalgearsolid3mc/mods/4"><b>MGS3 Better Audio</b></a>
-<br><br><sub>Free Nexus login required — grab the <b>Full Version</b>. Skip this and the installer will offer to open the pages for you.</sub>
+<i>(Recommended)</i> Grab the <b>Better Audio Mod</b> for each game — just leave
+the files in <code>Downloads</code>, the installer finds them by itself:<br><br>
+🔊 <a href="https://www.nexusmods.com/metalgearsolid2mc/mods/3"><b>MGS2 Better Audio</b></a> — one file: <i>Full Version</i> (v2.0)<br>
+🔊 <a href="https://www.nexusmods.com/metalgearsolid3mc/mods/4"><b>MGS3 Better Audio</b></a> — <b>two</b> files: the main mod (v1.0 — that's current!) <b>and</b> <i>Update 2.0</i> (~25 MB)
+<br><br><sub>Free Nexus login required. The installer checks what you have and warns about anything missing. Skip this step and it will open the pages for you instead.</sub>
 </td></tr>
 <tr><td align="center"><h3>3</h3></td><td>
 <b>Double-click the installer.</b> Answer a few questions. Done.
@@ -122,8 +121,12 @@ you get the good cutscenes *and* skip the launcher.
 | High-quality cinematics | **on** |
 | Skip KONAMI intro logos | **on** |
 | Skip the launcher | **on** |
-| MGS3 high-res textures | off |
 | Mod update checks | off |
+
+> 🚫 **No MGS3 high-res texture option:** Konami's official High Resolution
+> Texture Pack can be *installed* on the Steam Deck but **cannot be used
+> in-game** there, so the kit doesn't offer it. (The Bugfix Compilation's
+> restored textures are unrelated and always installed.)
 
 > 🖥️ **Docked / TV:** SteamOS may default a game to 1280×720. Set the game's
 > *Properties → Game Resolution* to **Native** for full quality. Handheld needs
@@ -151,8 +154,21 @@ checks for this fix and warns when it's absent).
 It lives on NexusMods, which requires a free login, and **the author does not
 permit it being mirrored** — that's the primary reason this kit will never
 host or auto-fetch it (the 2–3 GB files also exceed GitHub's 2 GB release
-limit). The installer checks the version in the downloaded filename and warns
-if a newer release exists on Nexus.
+limit).
+
+**What to download per game:**
+
+- **MGS2** — one archive: *Full Version* (v2.0).
+- **MGS3** — **two** archives: the main mod (v1.0 — that *is* the current
+  main file) **plus** the small *Update 2.0* (~25 MB). An optional
+  *HQ Ending Cutscenes* archive (~178 MB, higher-bitrate ending audio) also
+  exists; the installer offers it if found.
+
+The installer reads the version and mod-id baked into every Nexus download
+filename, so it matches even generically-named files like
+`Update 2.0-4-2-0-….zip`, validates each archive's contents before
+installing, layers them in the right order, and warns if MGS3's update is
+missing.
 
 🔊 **[MGS2 Better Audio Mod](https://www.nexusmods.com/metalgearsolid2mc/mods/3)**
 &nbsp;·&nbsp;

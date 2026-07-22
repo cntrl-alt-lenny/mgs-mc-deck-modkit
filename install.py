@@ -130,11 +130,23 @@ GAMES = {
 
 LAUNCH_OPTIONS = 'WINEDLLOVERRIDES="wininet,winhttp=n,b" %command%'
 
-# Advisory freshness check for the Better Audio archives (July 2026). Nexus
-# filenames end in -<modid>-<major>-<minor>-<timestamp>.<ext>. This only
-# produces a WARNING if the user's file is older — never a hard block, so a
-# stale entry here can't strand anyone.
-AUDIO_CURRENT = {"MGS2": (2, 0), "MGS3": (2, 0)}
+# What the Better Audio pages actually ship (verified July 2026). Nexus
+# download filenames end in -<modid>-<major>-<minor>-<timestamp>.<ext>;
+# the modid identifies the page, so update archives with generic names
+# (e.g. "Update 2.0-4-2-0-....zip") can be matched without "MGS3" in the name.
+#
+#   MGS2 (mod 3): one archive — "Full Version" v2.0. Nothing else needed.
+#   MGS3 (mod 4): TWO required archives — the ~2.7 GB main mod, which is
+#                 v1.0 and NOT obsolete, plus the small "Update 2.0" patch
+#                 installed after it. (An optional "HQ Ending Cutscenes"
+#                 archive also exists — higher-bitrate ending audio.)
+#
+# All checks below are advisory warnings, never hard blocks, so a stale
+# entry here can't strand anyone.
+AUDIO_EXPECT = {
+    "MGS2": {"modid": 3, "full": (2, 0), "update": None},
+    "MGS3": {"modid": 4, "full": (1, 0), "update": (2, 0)},
+}
 NEXUS_SUFFIX = re.compile(r"-(\d+)-(\d+)-(\d+)-(\d{9,11})\.(?:zip|7z|rar)$",
                           re.IGNORECASE)
 
@@ -666,7 +678,9 @@ def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
         "HiresoUpScale": "0",
     }
     if g["key"] == "mgs3":
-        wanted["HiresoTexture"] = "1" if opts.get("hq_textures") else "0"
+        # Always 0: Konami's official high-res texture pack installs on the
+        # Steam Deck but cannot be used in-game there.
+        wanted["HiresoTexture"] = "0"
 
     save_root = game_dir / f"{g['dirname'].lower()}_savedata_win"
     existing = sorted(save_root.glob("*/launcher/launcher_sv"))
@@ -759,6 +773,37 @@ def audio_version(path: Path) -> tuple[int, int] | None:
     return (int(m.group(2)), int(m.group(3))) if m else None
 
 
+def audio_modid(path: Path) -> int | None:
+    """Parse the NexusMods mod id from a download filename."""
+    m = NEXUS_SUFFIX.search(path.name)
+    return int(m.group(1)) if m else None
+
+
+def scan_update_archives(short: str) -> list[Path]:
+    """Small archives belonging to this game's Nexus mod page, by modid.
+
+    Update files often have generic names ("Update 2.0-4-2-0-<ts>.zip"), so
+    name-matching alone misses them — the modid in the suffix is authoritative.
+    """
+    modid = AUDIO_EXPECT.get(short, {}).get("modid")
+    exts = {".zip", ".7z", ".rar"}
+    roots = [Path.home() / "Downloads", Path.home() / "Desktop",
+             Path.home() / "Documents", Path.home()]
+    hits: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in root.iterdir():
+            if (p.is_file() and p.suffix.lower() in exts
+                    and MIN_UPDATE_BYTES <= p.stat().st_size < MIN_AUDIO_BYTES
+                    and modid is not None and audio_modid(p) == modid):
+                hits.add(p)
+    hits.update(p for p in scan_audio_archives(short)
+                if p.stat().st_size < MIN_AUDIO_BYTES)
+    return sorted(hits, key=lambda p: (audio_version(p) or (0, 0),
+                                       p.stat().st_mtime))
+
+
 def probe_audio_archive(path: Path) -> bool:
     """Cheap sanity check that this really is an MGS audio mod archive."""
     p = subprocess.run(["bsdtar", "-tf", str(path)],
@@ -810,9 +855,13 @@ def obtain_audio_archives(g: dict, ui: UI) -> list[Path]:
                 "no need to tell me where it is.")
             arc = guess_audio_archive(short)
 
-    # Freshness: warn (never block) if the filename says it's an old version.
+    expect = AUDIO_EXPECT.get(short, {})
+
+    # Freshness: warn (never block) if the MAIN archive is older than the
+    # page's current main file. NOTE: MGS3's main file is v1.0 and that IS
+    # current — its 2.x content ships as a separate small update archive.
     ver = audio_version(arc) if arc else None
-    cur = AUDIO_CURRENT.get(short)
+    cur = expect.get("full")
     if arc and ver and cur and ver < cur:
         if ui.yesno(
             f"Heads up: this {short} archive is version {ver[0]}.{ver[1]}, "
@@ -841,14 +890,49 @@ def obtain_audio_archives(g: dict, ui: UI) -> list[Path]:
         ):
             return []
 
-    # Any smaller matching archives newer than the full one are treated as
-    # official patch/update files and layered on top, oldest first.
+    # Updates / optional extras from the same mod page, matched by the modid
+    # in the Nexus filename suffix (their names may not mention the game at
+    # all, e.g. "Update 2.0-4-2-0-<ts>.zip"). Required-style updates are
+    # auto-included; cutscene/ending extras are offered as a choice.
+    # Ordered by version then mtime, so the base is patched oldest-first.
     chosen = [arc]
-    for extra in scan_audio_archives(short):
-        if (extra != arc and extra.stat().st_size < MIN_AUDIO_BYTES
-                and extra.stat().st_mtime >= arc.stat().st_mtime
-                and probe_audio_archive(extra)):
+    have_update = False
+    for extra in scan_update_archives(short):
+        if extra == arc or not probe_audio_archive(extra):
+            continue
+        name = extra.name.lower()
+        if "cutscene" in name or "ending" in name:
+            if ui.yesno(
+                f"Optional extra found for {short}:\n\n{extra.name} "
+                f"({extra.stat().st_size / 1048576:.0f} MB)\n\n"
+                "Higher-bitrate ending-cutscene audio from the same mod "
+                "page. Install it too?"
+            ):
+                chosen.append(extra)
+        else:
             chosen.append(extra)
+            uv = audio_version(extra)
+            if uv and expect.get("update") and uv >= expect["update"]:
+                have_update = True
+
+    # MGS3's page splits the mod: main v1.0 archive + required "Update 2.0".
+    if expect.get("update") and not have_update:
+        u = expect["update"]
+        if ui.yesno(
+            f"The {short} Better Audio Mod also needs its small "
+            f"'Update {u[0]}.{u[1]}' archive (~25 MB), which wasn't found "
+            "on this machine.\n\n"
+            f"Open the page to download it now?\n{g['audio_page']}\n\n"
+            "(No = install without it; you can re-run this kit later)"
+        ):
+            open_url(g["audio_page"])
+            ui.info("Download the Update archive (Files tab), then click "
+                    "OK here.")
+            for extra in scan_update_archives(short):
+                if (extra not in chosen and probe_audio_archive(extra)
+                        and not ("cutscene" in extra.name.lower()
+                                 or "ending" in extra.name.lower())):
+                    chosen.append(extra)
     return chosen
 
 
@@ -904,11 +988,12 @@ def main() -> int:
     # 1. Find the games -----------------------------------------------------
     found = find_games()
     if not found:
-        ui.info("Couldn't auto-detect MGS2 or MGS3.\n\n"
+        ui.info("Couldn't auto-detect any Master Collection game "
+                "(MGS1, MGS2 or MGS3).\n\n"
                 "Next you'll be asked to point at a game folder manually "
-                "(the one containing 'METAL GEAR SOLID2.exe' or "
-                "'METAL GEAR SOLID3.exe').")
-        manual = ui.pick_dir("Select your MGS2 or MGS3 folder")
+                "(the one containing 'METAL GEAR SOLID.exe', "
+                "'METAL GEAR SOLID2.exe' or 'METAL GEAR SOLID3.exe').")
+        manual = ui.pick_dir("Select your MGS1, MGS2 or MGS3 folder")
         if not manual:
             ui.error("No install selected. Aborting.")
             return 1
@@ -925,7 +1010,8 @@ def main() -> int:
     if len(found) > 1:
         picks = ui.checklist(
             "MGS Mod Kit — Choose Games",
-            "Both games detected. Install mods for:",
+            f"{len(found)} Master Collection games detected. "
+            "Install mods for:",
             [(k, f"{GAMES[k]['name']}  ({found[k][0]})", True) for k in found],
         )
         if not picks:
@@ -937,7 +1023,7 @@ def main() -> int:
     hdfix_sel = [k for k in found if GAMES[k].get("kind", "hdfix") == "hdfix"]
     opts = {
         "button_icons": "Steam Deck", "audio_mode": "Stereo (2.0)",
-        "hq_movies": True, "hq_textures": False, "skip_splash": True,
+        "hq_movies": True, "skip_splash": True,
         "update_check": False, "skip_launcher": True,
     }
     if hdfix_sel:
@@ -960,6 +1046,9 @@ def main() -> int:
                                       "surround receiver / speaker setup")],
         ) or "Stereo (2.0)"
 
+        # (No MGS3 high-res texture option: Konami's official texture pack
+        # can be installed on the Steam Deck but cannot be used in-game,
+        # so the kit always leaves HiresoTexture=0.)
         extras = ui.checklist(
             "Extra Options", "Optional tweaks (recommended defaults shown):",
             [("hq_movies", "High-quality cinematics  (set for you — no "
@@ -967,10 +1056,9 @@ def main() -> int:
              ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
              ("skip_launcher", "Skip the Konami launcher and boot straight "
                                "into the game", True),
-             ("hq_textures", "MGS3 only: high-resolution textures", False),
              ("update_check", "Check for mod updates on launch", False)],
         )
-        for k in ("hq_movies", "hq_textures", "skip_splash", "update_check",
+        for k in ("hq_movies", "skip_splash", "update_check",
                   "skip_launcher"):
             opts[k] = k in extras
 
@@ -1000,9 +1088,9 @@ def main() -> int:
         else:
             bits = [f"MGSHDFix {HDFIX_VERSION}"]
             if key in audio_archives:
-                n = len(audio_archives[key])
-                bits.append("Better Audio Mod"
-                            + (f" ({n} archives)" if n > 1 else ""))
+                bits.append("Better Audio Mod ["
+                            + " + ".join(a.name for a in audio_archives[key])
+                            + "]")
             bits.append(f"Bugfix Compilation {g['bugfix_version']} (Base)")
             bits.append("tuned MGSHDFix.settings")
         plan.append(f"• {g['short']}  →  {d}\n    {' + '.join(bits)}")
