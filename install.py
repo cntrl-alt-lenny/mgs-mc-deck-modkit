@@ -553,6 +553,32 @@ def free_gb(path: Path) -> float:
     return st.f_bavail * st.f_frsize / (1024 ** 3)
 
 
+def detect_device(env: dict | None = None,
+                  dmi_bases: tuple[str, ...] | None = None) -> str:
+    """Best-effort hardware profile: 'steam_deck' or 'generic_linux'.
+
+    Only nudges menu defaults and the one genuine Deck-specific rule
+    (Konami's high-res texture pack being unusable in-game there) — it can
+    never block or change what gets installed. Not every SteamOS device is
+    a Deck (Steam Machines, desktop SteamOS), so unknown hardware falls
+    back to 'generic_linux'.
+    """
+    env = os.environ if env is None else env
+    if env.get("SteamDeck"):
+        return "steam_deck"
+    for base in dmi_bases or ("/sys/class/dmi/id",
+                              "/sys/devices/virtual/dmi/id"):
+        try:
+            vendor = (Path(base) / "sys_vendor").read_text().strip()
+            product = (Path(base) / "product_name").read_text().strip()
+        except OSError:
+            continue
+        # Jupiter = LCD Deck, Galileo = OLED Deck
+        if vendor == "Valve" and product in ("Jupiter", "Galileo"):
+            return "steam_deck"
+    return "generic_linux"
+
+
 # ---------------------------------------------------------------------------
 # Install steps  (ORDER MATTERS — see the mods' own README:
 #   1. MGSHDFix  →  2. Better Audio  →  3. Bugfix Compilation Base)
@@ -677,9 +703,13 @@ def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
         "HiresoRender": "0",
         "HiresoUpScale": "0",
     }
-    if g["key"] == "mgs3":
-        # Always 0: Konami's official high-res texture pack installs on the
-        # Steam Deck but cannot be used in-game there.
+    if g["key"] == "mgs3" and opts.get("device", "steam_deck") == "steam_deck":
+        # Deck only: Konami's official high-res texture pack installs on the
+        # Steam Deck but cannot be used in-game there, so the flag is forced
+        # off to keep the launcher from dead-ending. On other hardware an
+        # existing HiresoTexture choice (e.g. the DLC genuinely in use on a
+        # desktop) is preserved; fresh installs still default to 0 via the
+        # template below.
         wanted["HiresoTexture"] = "0"
 
     save_root = game_dir / f"{g['dirname'].lower()}_savedata_win"
@@ -1021,21 +1051,30 @@ def main() -> int:
 
     # 3. Options (only relevant to the MGSHDFix games) -----------------------
     hdfix_sel = [k for k in found if GAMES[k].get("kind", "hdfix") == "hdfix"]
+    device = detect_device()
     opts = {
+        "device": device,
         "button_icons": "Steam Deck", "audio_mode": "Stereo (2.0)",
         "hq_movies": True, "skip_splash": True,
         "update_check": False, "skip_launcher": True,
     }
     if hdfix_sel:
+        # Detection only reorders the menu so the likeliest choice is
+        # preselected — every option stays available on every device.
+        icon_items = [
+            ("Steam Deck", "Steam Deck — matches the Deck's physical buttons"),
+            ("Xbox One", "Xbox — Steam Machine / Xbox-style pads"),
+            ("PlayStation 5", "PlayStation 5 — for a DualSense"),
+            ("PlayStation 2", "PlayStation 2 — authentic, restored by the Bugfix mod"),
+            ("Keyboard / Mouse", "Keyboard / Mouse"),
+        ]
+        if device != "steam_deck":
+            icon_items.insert(0, icon_items.pop(1))    # Xbox first
         opts["button_icons"] = ui.menu(
             "Controller Button Icons",
             "Which button prompts should MGS2/MGS3 show?",
-            [("Steam Deck", "Steam Deck — matches the Deck's physical buttons"),
-             ("Xbox One", "Xbox — Steam Machine / Xbox-style pads"),
-             ("PlayStation 5", "PlayStation 5 — for a DualSense"),
-             ("PlayStation 2", "PlayStation 2 — authentic, restored by the Bugfix mod"),
-             ("Keyboard / Mouse", "Keyboard / Mouse")],
-        ) or "Steam Deck"
+            icon_items,
+        ) or icon_items[0][0]
 
         opts["audio_mode"] = ui.menu(
             "Audio Output",
@@ -1096,7 +1135,9 @@ def main() -> int:
         plan.append(f"• {g['short']}  →  {d}\n    {' + '.join(bits)}")
 
     target_dir = next(iter(found.values()))[0]
-    summary = f"Free space: {free_gb(target_dir):.0f} GB\n\n"
+    summary = (
+        f"Device: {'Steam Deck (detected)' if device == 'steam_deck' else 'Linux / SteamOS PC'}"
+        f"    Free space: {free_gb(target_dir):.0f} GB\n\n")
     if hdfix_sel:
         summary = (
             f"Button icons: {opts['button_icons']}    "

@@ -125,8 +125,16 @@ you get the good cutscenes *and* skip the launcher.
 
 > 🚫 **No MGS3 high-res texture option:** Konami's official High Resolution
 > Texture Pack can be *installed* on the Steam Deck but **cannot be used
-> in-game** there, so the kit doesn't offer it. (The Bugfix Compilation's
-> restored textures are unrelated and always installed.)
+> in-game** there, so on a detected Deck the kit keeps its launcher flag off.
+> On other hardware an existing high-res-texture setup is left untouched.
+> (The Bugfix Compilation's restored textures are unrelated and always
+> installed.)
+>
+> 🔎 **Device detection:** the installer recognises a Steam Deck (DMI
+> `Valve` + `Jupiter`/`Galileo`, or the `SteamDeck` env var) and shows what
+> it detected on the confirm screen. Detection only reorders menu defaults —
+> every mod works identically on Deck, Steam Machine, and any Linux PC, and
+> a failed detection simply falls back to the generic defaults.
 
 > 🖥️ **Docked / TV:** SteamOS may default a game to 1280×720. Set the game's
 > *Properties → Game Resolution* to **Native** for full quality. Handheld needs
