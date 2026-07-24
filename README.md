@@ -98,8 +98,8 @@ rehosted here.**
 (needs `bsdtar`). Bumping a mod version? `python3 tools/refresh_checksums.py`
 prints the new hashes.</sub>
 
-<sub>🛠️ **Maintainers:** the shortcut pins the installer to release **`v1.1.0`**.
-To cut a release, push a matching tag (`git tag v1.1.0 && git push --tags`) —
+<sub>🛠️ **Maintainers:** the shortcut pins the installer to release **`v1.2.0`**.
+To cut a release, push a matching tag (`git tag v1.2.0 && git push --tags`) —
 [`release.yml`](.github/workflows/release.yml) runs the tests, publishes
 `install.py` + a `SHA256SUMS` file, and the `.desktop`'s baked-in hash must
 match that `install.py`. After editing `install.py`, update the `SHA=` value in
