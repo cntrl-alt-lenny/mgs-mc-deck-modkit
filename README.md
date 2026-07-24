@@ -1,22 +1,43 @@
 <div align="center">
 
-# 🐍 MGS Mod Kit
+<img src="assets/banner.svg" alt="MGS Master Collection Mod Kit — one-click vanilla-faithful fixes for Steam Deck / SteamOS" width="100%">
 
-### Metal Gear Solid **1**, **2** & **3** · Master Collection
-### Steam Deck · Steam Machine · any SteamOS or Linux PC
+<br><br>
+
+[![Latest release](https://img.shields.io/github/v/release/cntrl-alt-lenny/mgs-mc-deck-modkit?style=for-the-badge&color=4ade80&label=release)](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/cntrl-alt-lenny/mgs-mc-deck-modkit/ci.yml?style=for-the-badge&label=CI&logo=github)](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/actions/workflows/ci.yml)
+![Steam Deck](https://img.shields.io/badge/Steam_Deck-verified-1A9FFF?style=for-the-badge&logo=steamdeck&logoColor=white)
+![SteamOS](https://img.shields.io/badge/SteamOS-3.x-000000?style=for-the-badge&logo=steam&logoColor=white)
+![Python](https://img.shields.io/badge/python3-no_deps-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Licence](https://img.shields.io/badge/licence-MIT-green?style=for-the-badge)
 
 *One double-click. The whole setup. No guesswork.*
 
-<br>
-
-![Steam Deck](https://img.shields.io/badge/Steam_Deck-verified_setup-1A9FFF?style=for-the-badge&logo=steamdeck&logoColor=white)
-![SteamOS](https://img.shields.io/badge/SteamOS-3.x-000000?style=for-the-badge&logo=steam&logoColor=white)
-![Python](https://img.shields.io/badge/python3-no_dependencies-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Licence](https://img.shields.io/badge/licence-MIT-green?style=for-the-badge)
-
-[![CI](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/actions/workflows/ci.yml/badge.svg)](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/actions/workflows/ci.yml)
-
 </div>
+
+> **Why this exists** — the Steam releases of MGS 1/2/3 are transformed by a
+> handful of community fixes, but wiring them up correctly on SteamOS is
+> fiddly (MGSHDFix won't even boot without a config file its Windows-only tool
+> generates). This kit makes the best *vanilla-faithful* setup as close to
+> one-click as possible, and does it **safely** — checksummed downloads,
+> staged extraction, backups, and a real uninstall.
+
+## 🎯 What it does
+
+- 🔍 **Auto-detects** your MGS 1 / 2 / 3 installs — internal drive, microSD, and secondary Steam libraries
+- 📥 **Installs the essential fix mods** in the exact required order, straight from the authors' official releases
+- ⚙️ **Writes a known-good config** (MGSHDFix won't launch without one) and applies the Konami launcher's own options so it can be skipped
+- 🔒 **Verifies every download** against a pinned SHA-256 and stages/​path-checks archives before touching your game
+- ♻️ **Transactional + reversible** — backups, rollback on failure, and a one-command `--uninstall`
+- 🌿 **Vanilla-faithful only** — fixes and restorations, never AI-upscaled texture packs
+
+## 🎮 Per-game
+
+| Game | Installs | What it fixes / restores |
+|:--|:--|:--|
+| **MGS1** | MGSM2Fix | Analog deadzone removed, uncensored Western textures restored, startup notices skipped, custom/high internal resolution |
+| **MGS2** | MGSHDFix + Community Bugfix + *(optional)* Better Audio | Native res & 16:10, corrected FOV/framebuffer, lower CPU, restored PS2 assets, launcher skipped, uncompressed audio *(also fixes a late-game cutscene crash)* |
+| **MGS3** | MGSHDFix + Community Bugfix + *(optional)* Better Audio | Native res & 16:10, corrected FOV/framebuffer, lower CPU, restored PS2 assets, launcher skipped, uncompressed audio |
 
 ---
 
