@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install bsdtar (libarchive-tools) + pytest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+          bsdtar --version
+          python -m pip install --upgrade pip pytest
+
+      - name: Byte-compile the installer
+        run: python -m py_compile install.py
+
+      - name: Run the test-suite
+        run: python -m pytest tests/ -q

@@ -1,0 +1,47 @@
+name: Release
+
+# Push a tag like `v1.1.0` to cut an immutable release. The installer shortcut
+# (Install-MGS-Mods.desktop) downloads install.py from the release created here
+# and verifies its SHA-256, so users always run a fixed, checksummed installer
+# rather than the moving `main`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test before releasing
+        run: |
+          sudo apt-get update && sudo apt-get install -y libarchive-tools
+          python -m pip install --upgrade pip pytest
+          python -m pytest tests/ -q
+
+      - name: Generate checksums
+        run: |
+          sha256sum install.py Install-MGS-Mods.desktop > SHA256SUMS
+          echo "## Installer checksum" >> notes.md
+          echo '```' >> notes.md
+          cat SHA256SUMS >> notes.md
+          echo '```' >> notes.md
+          echo "Verify the SHA-256 baked into Install-MGS-Mods.desktop matches install.py above."
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            install.py
+            Install-MGS-Mods.desktop
+            SHA256SUMS
+          body_path: notes.md

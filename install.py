@@ -28,7 +28,14 @@ UI, so hand-writing one does not work. This kit ships a canonical file captured
 from the real Config Tool, so you never have to run it under Proton.
 
 Mods are downloaded live from their official GitHub releases — nothing is
-rehosted here.
+rehosted here. Every auto-downloaded archive is checked against a pinned
+SHA-256 before it is touched (see *_SHA256 below).
+
+Installs are TRANSACTIONAL. Each archive is extracted to a staging folder and
+every path is validated (no absolute paths, no `../` traversal, no symlinks)
+before anything is copied into the live game directory. Overwritten originals
+are backed up and every change is recorded in a manifest, so a mid-install
+failure rolls back cleanly and `--uninstall` reverses the whole thing later.
 
 It deliberately does NOT set Steam launch options: Steam rewrites its config
 from memory and will silently revert edits made while it is running. The one
@@ -38,10 +45,13 @@ Requirements (all preinstalled on SteamOS): python3, bsdtar, and kdialog OR
 zenity. No pip packages, no sudo.
 
 Run it from the Desktop (Konsole):  python3 install.py
+Uninstall a previous run:           python3 install.py --uninstall
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -50,9 +60,25 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) mgs-mc-deck-modkit"
+
+MODKIT_VERSION = "1.1.0"
+
+# Directory (inside each game folder) where this kit records what it installed,
+# keeps backups of any files it overwrote, and stages archives before copying
+# them into place. It is the anchor for repair/uninstall — see InstallTxn.
+MODKIT_DIRNAME = "mgs-modkit"
+MANIFEST_NAME = "manifest.json"
+
+# Overwritten originals larger than this are recorded but NOT copied into the
+# backup folder — backing up multi-GB game assets (the Better Audio Mod
+# replaces some) would double disk usage for no real benefit, since Steam's
+# "Verify integrity of game files" restores them for free. Small fix files
+# (dlls, .asi, .ini, save files) are always backed up so uninstall is exact.
+BACKUP_MAX_BYTES = 64 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Pinned versions.
@@ -69,6 +95,10 @@ HDFIX_URL = (
     "https://github.com/ShizCalev/MGSHDFix/releases/download/"
     f"{HDFIX_VERSION}/MGSHDFix_{HDFIX_VERSION}.zip"
 )
+# SHA-256 of the release asset above, so a tampered/truncated download is
+# caught before it touches the game folder. Regenerate with `sha256sum` after
+# bumping a version (see tools/refresh_checksums.py).
+HDFIX_SHA256 = "ec42a40a26d80425496cf20a52c13d91f1523d74472c77183dda0aaf0d46db33"
 
 # MGS1 (M2 emulator) fix — nuggslet's MGSM2Fix. Ships its own MGSM2Fix.ini
 # whose defaults are already vanilla-faithful (censored-texture restorations
@@ -79,6 +109,7 @@ M2FIX_URL = (
     "https://github.com/nuggslet/MGSM2Fix/releases/download/"
     f"{M2FIX_TAG}/MGSM2Fix_{M2FIX_VERSION}.zip"
 )
+M2FIX_SHA256 = "a979dea88acd8324b269b101a79293d32674af03d64e800ab9978216b215410d"
 
 GAMES = {
     "mgs2": {
@@ -96,6 +127,8 @@ GAMES = {
             "releases/download/2.2.0/"
             "MGS2-Community-Bugfix-Compilation_Base_v2.2.0.zip"
         ),
+        "bugfix_sha256":
+            "c09d2c51128d389af1e90a4356dbfbca1e0cd63beb8f5e1ae76200b00b42c131",
         "bugfix_asi": "MGS2-Community-Bugfix-Compilation.asi",
         "audio_page": "https://www.nexusmods.com/metalgearsolid2mc/mods/3",
     },
@@ -113,6 +146,8 @@ GAMES = {
             "releases/download/1.1.0/"
             "MGS3-Community-Bugfix-Compilation_Base_v1.1.0.zip"
         ),
+        "bugfix_sha256":
+            "1bc091847726560e31f019e9a327303623bf646bbb6bd0adc1d9a18cabb754f9",
         "bugfix_asi": "MGS3-Community-Bugfix-Compilation.asi",
         "audio_page": "https://www.nexusmods.com/metalgearsolid3mc/mods/4",
     },
@@ -429,15 +464,22 @@ class UI:
         return ans or None
 
     def checklist(self, title: str, text: str,
-                  items: list[tuple[str, str, bool]]) -> list[str]:
-        """items: (tag, label, checked). Returns selected tags."""
+                  items: list[tuple[str, str, bool]]) -> list[str] | None:
+        """items: (tag, label, checked).
+
+        Returns the selected tags, or ``None`` if the user CANCELLED the
+        dialog. That distinction matters: an empty list means "the user
+        deliberately unchecked everything", whereas None means "the user
+        backed out" — the caller keeps its defaults instead of silently
+        treating a cancel as "turn every option off".
+        """
         if self.kind == "kdialog":
             args = ["kdialog", "--title", title, "--separate-output",
                     "--checklist", text]
             for tag, label, chk in items:
                 args += [tag, label, "on" if chk else "off"]
             rc, out = self._run(args)
-            return out.splitlines() if rc == 0 else []
+            return out.splitlines() if rc == 0 else None
         if self.kind == "zenity":
             args = ["zenity", "--list", "--checklist", "--title", title,
                     "--text", text,
@@ -446,11 +488,16 @@ class UI:
             for tag, label, chk in items:
                 args += ["TRUE" if chk else "FALSE", tag, label]
             rc, out = self._run(args)
-            return out.split("|") if rc == 0 and out else []
+            if rc != 0:
+                return None
+            return out.split("|") if out else []
         print(f"\n{title}\n{text}")
         for i, (tag, label, chk) in enumerate(items):
             print(f"  [{i}] {'x' if chk else ' '} {label}")
-        raw = input("Enter numbers to toggle (space-separated, blank=keep defaults): ")
+        raw = input("Enter numbers to toggle (space-separated, "
+                    "blank=keep defaults, 'c'=cancel): ")
+        if raw.strip().lower() == "c":
+            return None
         chosen = {tag for tag, _, chk in items if chk}
         if raw.strip():
             toggles = {int(x) for x in raw.split() if x.isdigit()}
@@ -534,18 +581,121 @@ def find_games() -> dict[str, tuple[Path, Path]]:
 # ---------------------------------------------------------------------------
 # Download / extract helpers
 # ---------------------------------------------------------------------------
-def download(url: str, dest: Path, log) -> None:
+def download(url: str, dest: Path, log, sha256: str | None = None) -> None:
+    """Stream `url` to `dest`, verifying its SHA-256 if one is pinned.
+
+    The hash is computed on the fly (no second read), and a mismatch deletes
+    the partial file and aborts — a corrupted or tampered archive never
+    reaches the extractor. Passing sha256=None (user-supplied Nexus archives,
+    whose bytes we can't know ahead of time) skips only the hash check; the
+    non-empty and content checks still apply.
+    """
     log(f"  ↓ {url.rsplit('/', 1)[-1]}")
     req = urllib.request.Request(url, headers={"User-Agent": UA})
+    h = hashlib.sha256()
     with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
+        while True:
+            chunk = r.read(1024 * 256)
+            if not chunk:
+                break
+            h.update(chunk)
+            f.write(chunk)
     if dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
         raise RuntimeError(f"Downloaded 0 bytes from {url}")
+    if sha256 is not None:
+        got = h.hexdigest()
+        if got.lower() != sha256.lower():
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(
+                "Checksum mismatch — refusing to install a file that doesn't "
+                f"match its pinned hash.\n\n  {url.rsplit('/', 1)[-1]}\n"
+                f"  expected {sha256}\n  got      {got}\n\n"
+                "The download was corrupted or the release was changed. "
+                "Nothing was written to your game folder.")
+        log(f"    ✓ sha256 verified")
 
 
-def extract(archive: Path, dest: Path) -> None:
-    dest.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["bsdtar", "-xf", str(archive), "-C", str(dest)], check=True)
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 256), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Safe extraction — validate an archive's paths BEFORE trusting its contents.
+#
+# bsdtar already refuses absolute paths and `..` members, but we don't rely on
+# that: we extract to an isolated staging dir, then walk the result and reject
+# anything unsafe (symlinks, hardlinks, or paths that escape staging) rather
+# than copying a single malicious entry into the live game folder.
+# ---------------------------------------------------------------------------
+class UnsafeArchiveError(RuntimeError):
+    pass
+
+
+def _rel_is_unsafe(rel: str) -> bool:
+    if not rel or rel.startswith("/") or rel.startswith("\\"):
+        return True
+    parts = re.split(r"[\\/]+", rel)
+    return any(p in ("..",) for p in parts)
+
+
+def staged_files(archive: Path, staging: Path) -> list[str]:
+    """Extract `archive` into `staging` and return the safe relative paths.
+
+    Raises UnsafeArchiveError if the archive lists an absolute/`..` path, or if
+    anything extracted is a symlink or otherwise not a plain file/dir. The
+    caller moves the returned paths into place; nothing here touches the game.
+    """
+    # 1. Pre-flight the listing — reject obviously hostile members up front.
+    listing = subprocess.run(["bsdtar", "-tf", str(archive)],
+                             capture_output=True, text=True, check=True)
+    for ln in listing.stdout.splitlines():
+        name = ln.rstrip("\r")
+        if not name:
+            continue
+        if _rel_is_unsafe(name.rstrip("/")):
+            raise UnsafeArchiveError(
+                f"Archive '{archive.name}' contains an unsafe path "
+                f"({name!r}); refusing to extract it.")
+
+    # 2. Extract into the isolated staging dir.
+    staging.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["bsdtar", "-xf", str(archive), "-C", str(staging)],
+                   check=True)
+
+    # 3. Walk what landed. Any symlink (dir or file) is a traversal risk once
+    #    we copy through it, so reject the archive outright. os.walk does not
+    #    follow symlinks, so a symlinked dir is seen here, not descended into.
+    root = staging.resolve()
+    files: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(staging):
+        for d in dirnames:
+            if os.path.islink(os.path.join(dirpath, d)):
+                raise UnsafeArchiveError(
+                    f"Archive '{archive.name}' contains a symlinked directory "
+                    f"({d!r}); refusing to install it.")
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            if os.path.islink(full):
+                raise UnsafeArchiveError(
+                    f"Archive '{archive.name}' contains a symlink "
+                    f"({fn!r}); refusing to install it.")
+            if not os.path.isfile(full):
+                # sockets, fifos, devices — nothing a mod archive should hold.
+                raise UnsafeArchiveError(
+                    f"Archive '{archive.name}' contains a non-regular file "
+                    f"({fn!r}); refusing to install it.")
+            resolved = Path(full).resolve()
+            if root not in resolved.parents and resolved != root:
+                raise UnsafeArchiveError(
+                    f"Archive '{archive.name}' path escapes staging "
+                    f"({fn!r}); refusing to install it.")
+            files.append(os.path.relpath(full, staging))
+    return files
 
 
 def free_gb(path: Path) -> float:
@@ -580,60 +730,219 @@ def detect_device(env: dict | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Transactional installer.
+#
+# Every file that lands in the game folder goes through one InstallTxn, which:
+#   • stages + path-validates each archive before copying anything in,
+#   • backs up any original it overwrites (small files only — see
+#     BACKUP_MAX_BYTES),
+#   • records every added/overwritten path plus the mod versions in a manifest,
+#   • rolls the whole thing back if any step raises, and
+#   • is replayed in reverse by uninstall_game().
+#
+# The manifest and backups live in <game>/mgs-modkit/, so repair and uninstall
+# need nothing but the game folder itself.
+# ---------------------------------------------------------------------------
+class InstallTxn:
+    def __init__(self, game_dir: Path, game_key: str, log) -> None:
+        self.game_dir = game_dir
+        self.game_key = game_key
+        self.log = log
+        self.root = game_dir / MODKIT_DIRNAME
+        self.backups = self.root / "backups"
+        self.staging = self.root / "staging"
+        self.added: list[str] = []
+        self.overwritten: list[dict] = []
+        self.mods: dict[str, str] = {}
+        self._added_set: set[str] = set()
+        self._backed_up: set[str] = set()
+        # Files a previous run of this kit already installed: treat them as
+        # "ours", so a re-install neither backs them up as if they were stock
+        # originals nor double-counts them.
+        self._prior_added: set[str] = set()
+        prev = self.root / MANIFEST_NAME
+        if prev.is_file():
+            try:
+                data = json.loads(prev.read_text(encoding="utf-8"))
+                self._prior_added = set(data.get("added", []))
+                # Carry prior backups forward: the REAL stock originals are
+                # already saved from the first run. On a re-install we must not
+                # re-back-up our own mod files over them (that would lose the
+                # true originals), and the manifest must keep pointing at them.
+                for o in data.get("overwritten", []):
+                    self.overwritten.append(o)
+                    self._backed_up.add(o["path"])
+            except (ValueError, OSError, KeyError):
+                pass
+
+    # -- recording -------------------------------------------------------
+    def note_mod(self, name: str, version: str) -> None:
+        self.mods[name] = version
+
+    def _prepare_dest(self, rel: str) -> None:
+        """Record what we're about to do to game_dir/rel (add vs overwrite)."""
+        if rel in self._added_set:
+            return  # already ours this run
+        dest = self.game_dir / rel
+        if dest.exists():
+            if rel in self._prior_added:
+                # Our own file from a previous run — reclaim it as added so
+                # uninstall removes it, and don't back it up.
+                self._added_set.add(rel)
+                self.added.append(rel)
+                return
+            if rel not in self._backed_up:
+                self._backed_up.add(rel)
+                size = dest.stat().st_size
+                if size <= BACKUP_MAX_BYTES:
+                    bpath = self.backups / rel
+                    bpath.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dest, bpath)
+                    self.overwritten.append(
+                        {"path": rel, "backup": f"backups/{rel}"})
+                else:
+                    self.overwritten.append({"path": rel, "backup": None})
+        else:
+            self._added_set.add(rel)
+            self.added.append(rel)
+
+    # -- operations ------------------------------------------------------
+    def install_archive(self, archive: Path) -> list[str]:
+        """Stage-validate `archive`, then move its files into the game dir."""
+        self.staging.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix="stage_", dir=self.staging))
+        try:
+            rels = staged_files(archive, stage)
+            for rel in rels:
+                if _rel_is_unsafe(rel):
+                    raise UnsafeArchiveError(
+                        f"Refusing unsafe path {rel!r} from {archive.name}")
+                self._prepare_dest(rel)
+                dest = self.game_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                src = stage / rel
+                try:
+                    os.replace(src, dest)          # fast path: same filesystem
+                except OSError:
+                    shutil.copy2(src, dest)        # cross-device fallback
+            return rels
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+
+    def write_bytes(self, rel: str, data: bytes) -> None:
+        """Create/replace a file we author (settings, launcher saves, ...)."""
+        self._prepare_dest(rel)
+        dest = self.game_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+    def read_text_ours(self, rel: str, encoding: str = "utf-8") -> str:
+        return (self.game_dir / rel).read_text(encoding=encoding)
+
+    # -- finish ----------------------------------------------------------
+    def commit(self) -> None:
+        self.staging.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(self.staging, ignore_errors=True)
+        manifest = {
+            "modkit_version": MODKIT_VERSION,
+            "game": self.game_key,
+            "installed_utc": datetime.now(timezone.utc)
+                .replace(microsecond=0).isoformat(),
+            "mods": self.mods,
+            "added": self.added,
+            "overwritten": self.overwritten,
+        }
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
+    def rollback(self) -> None:
+        """Undo everything this transaction did (best-effort, never raises)."""
+        for rel in reversed(self.added):
+            try:
+                (self.game_dir / rel).unlink(missing_ok=True)
+            except OSError:
+                pass
+        for o in self.overwritten:
+            if o.get("backup"):
+                src = self.root / o["backup"]
+                if src.is_file():
+                    try:
+                        dst = self.game_dir / o["path"]
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dst)
+                    except OSError:
+                        pass
+        _prune_empty_dirs(self.game_dir, self.added)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _prune_empty_dirs(base: Path, rels: list[str]) -> None:
+    """Remove now-empty directories left behind after files were removed."""
+    seen: set[Path] = set()
+    for rel in rels:
+        d = (base / rel).parent
+        while d != base and base in d.parents:
+            seen.add(d)
+            d = d.parent
+    for d in sorted(seen, key=lambda p: len(str(p)), reverse=True):
+        try:
+            d.rmdir()
+        except OSError:
+            pass  # not empty (other files live here) — leave it
+
+
+# ---------------------------------------------------------------------------
 # Install steps  (ORDER MATTERS — see the mods' own README:
 #   1. MGSHDFix  →  2. Better Audio  →  3. Bugfix Compilation Base)
 # ---------------------------------------------------------------------------
-def install_hdfix(game_dir: Path, tmp: Path, log) -> None:
+def install_hdfix(tx: InstallTxn, tmp: Path, log) -> None:
     log(f"  Installing MGSHDFix {HDFIX_VERSION} …")
     zp = tmp / f"MGSHDFix_{HDFIX_VERSION}.zip"
-    download(HDFIX_URL, zp, log)
-    extract(zp, game_dir)
+    download(HDFIX_URL, zp, log, sha256=HDFIX_SHA256)
+    tx.install_archive(zp)
+    tx.note_mod("MGSHDFix", HDFIX_VERSION)
     missing = [n for n in ("winhttp.dll", "wininet.dll")
-               if not (game_dir / n).is_file()]
-    if missing or not (game_dir / "plugins" / "MGSHDFix.asi").is_file():
+               if not (tx.game_dir / n).is_file()]
+    if missing or not (tx.game_dir / "plugins" / "MGSHDFix.asi").is_file():
         raise RuntimeError(
             "MGSHDFix extraction failed (missing: "
             f"{', '.join(missing) or 'plugins/MGSHDFix.asi'})")
     log("    ✓ winhttp.dll + wininet.dll + plugins/MGSHDFix.asi")
 
 
-def archive_file_entries(archive: Path) -> list[str]:
-    """All file (non-directory) entries in an archive, via bsdtar."""
-    p = subprocess.run(["bsdtar", "-tf", str(archive)],
-                       capture_output=True, text=True, check=True)
-    return [ln for ln in p.stdout.splitlines() if ln and not ln.endswith("/")]
-
-
-def install_better_audio(game_dir: Path, archives: list[Path], log) -> None:
+def install_better_audio(tx: InstallTxn, archives: list[Path], log) -> None:
     for archive in archives:
         log(f"  Installing Better Audio Mod from {archive.name} "
             f"({archive.stat().st_size / 1024**3:.2f} GB) — this takes a while …")
-        extract(archive, game_dir)
+        # install_archive stage-validates paths (no traversal/symlinks) and
+        # moves every file into place, tracking it for rollback/uninstall.
+        rels = tx.install_archive(archive)
         # Verify the payload actually landed — every file entry must exist.
-        entries = archive_file_entries(archive)
-        missing = [e for e in entries if not (game_dir / e).is_file()]
+        missing = [e for e in rels if not (tx.game_dir / e).is_file()]
         if missing:
             raise RuntimeError(
                 f"Better Audio archive '{archive.name}': {len(missing)} "
                 f"file(s) missing after extraction (e.g. {missing[0]}). "
                 "The archive may be corrupt — re-download it and re-run "
                 "this kit.")
-        log(f"    ✓ {archive.name}: all {len(entries)} files verified "
-            "on disk")
+        log(f"    ✓ {archive.name}: all {len(rels)} files verified on disk")
+    tx.note_mod("Better Audio Mod", "+".join(a.name for a in archives))
 
 
-def install_m2fix(game_dir: Path, tmp: Path, opts: dict, log) -> None:
+def install_m2fix(tx: InstallTxn, tmp: Path, opts: dict, log) -> None:
     log(f"  Installing MGSM2Fix {M2FIX_VERSION} …")
     zp = tmp / f"MGSM2Fix_{M2FIX_VERSION}.zip"
-    download(M2FIX_URL, zp, log)
-    extract(zp, game_dir)
+    download(M2FIX_URL, zp, log, sha256=M2FIX_SHA256)
+    tx.install_archive(zp)
+    tx.note_mod("MGSM2Fix", M2FIX_VERSION)
     missing = [n for n in ("d3d11.dll", "dinput8.dll", "MGSM2Fix64.asi",
-                           "MGSM2Fix.ini") if not (game_dir / n).is_file()]
+                           "MGSM2Fix.ini") if not (tx.game_dir / n).is_file()]
     if missing:
         raise RuntimeError(f"MGSM2Fix extraction failed (missing: "
                            f"{', '.join(missing)})")
-    ini = game_dir / "MGSM2Fix.ini"
-    text = ini.read_text()
+    text = tx.read_text_ours("MGSM2Fix.ini")
     if not opts.get("update_check"):
         text = text.replace("CheckForUpdates = true",
                             "CheckForUpdates = false", 1)
@@ -642,24 +951,27 @@ def install_m2fix(game_dir: Path, tmp: Path, opts: dict, log) -> None:
         # the LAST LAUNCHED game version", so until the user has picked a
         # version once, the selection menu still appears normally.
         text = text.replace("StartGame = false", "StartGame = true", 1)
-    ini.write_text(text)
+    tx.write_bytes("MGSM2Fix.ini", text.encode("utf-8"))
     log("    ✓ d3d11.dll + dinput8.dll + MGSM2Fix (vanilla-faithful "
         "shipped defaults; auto-boots your last-picked version)")
 
 
-def install_bugfix(g: dict, game_dir: Path, tmp: Path, log) -> None:
+def install_bugfix(tx: InstallTxn, g: dict, tmp: Path, log) -> None:
     log(f"  Installing {g['short']} Community Bugfix Compilation "
         f"{g['bugfix_version']} (Base) …")
     zp = tmp / f"{g['short']}_bugfix_base.zip"
-    download(g["bugfix_url"], zp, log)
-    extract(zp, game_dir)
-    if not (game_dir / "plugins" / g["bugfix_asi"]).is_file():
+    download(g["bugfix_url"], zp, log, sha256=g.get("bugfix_sha256"))
+    tx.install_archive(zp)
+    tx.note_mod(f"{g['short']} Community Bugfix Compilation",
+                g["bugfix_version"])
+    if not (tx.game_dir / "plugins" / g["bugfix_asi"]).is_file():
         raise RuntimeError(f"Bugfix Compilation failed (plugins/"
                            f"{g['bugfix_asi']} missing)")
     log(f"    ✓ plugins/{g['bugfix_asi']}")
 
 
-def write_settings(game_dir: Path, g: dict, opts: dict, log) -> None:
+def write_settings(tx: InstallTxn, g: dict, opts: dict, log) -> None:
+    game_dir = tx.game_dir
     body = SETTINGS_TEMPLATE
     for ph, val in (
         ("@BUTTON_ICONS@", opts["button_icons"]),
@@ -674,13 +986,11 @@ def write_settings(game_dir: Path, g: dict, opts: dict, log) -> None:
     if "@" in re.sub(r"[^@]", "", body):  # any placeholder left unsubstituted
         raise RuntimeError("Internal error: unsubstituted settings placeholder")
 
-    plugins = game_dir / "plugins"
-    plugins.mkdir(exist_ok=True)
-    dest = plugins / "MGSHDFix.settings"
+    rel = "plugins/MGSHDFix.settings"
     # The Config Tool writes CRLF; match it exactly.
-    dest.write_bytes(body.replace("\n", "\r\n").encode("utf-8"))
+    tx.write_bytes(rel, body.replace("\n", "\r\n").encode("utf-8"))
 
-    text = dest.read_text(encoding="utf-8")
+    text = (game_dir / rel).read_text(encoding="utf-8")
     sections = len(re.findall(r"^\[", text, re.M))
     keys = len(re.findall(r"^[^\[\r\n][^\r\n]*=", text, re.M))
     if sections != SETTINGS_EXPECTED_SECTIONS or keys != SETTINGS_EXPECTED_KEYS:
@@ -703,23 +1013,26 @@ def steamid64s(steam_root: Path) -> list[int]:
 
 
 def _read_launcher_sv(path: Path) -> dict[str, str]:
-    import json
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     return dict(zip(data["keyList"], data["valueList"]))
 
 
-def _write_launcher_sv(path: Path, keys: list[str], vals: list[str]) -> None:
-    import json
+def _launcher_sv_bytes(keys: list[str], vals: list[str]) -> bytes:
     body = json.dumps({"keyList": keys, "valueList": vals},
                       separators=(",", ":"), ensure_ascii=False)
-    path.parent.mkdir(parents=True, exist_ok=True)
     # UTF-8 BOM + trailing CRLF, byte-for-byte as the launcher writes it.
-    path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8") + b"\r\n")
+    return b"\xef\xbb\xbf" + body.encode("utf-8") + b"\r\n"
 
 
-def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
+def set_launcher_options(tx: InstallTxn, g: dict, steam_root: Path,
                          opts: dict, log) -> None:
-    """Apply the launcher's own options so the launcher can be skipped."""
+    """Apply the launcher's own options so the launcher can be skipped.
+
+    Writes go through the transaction, so an existing launcher_sv is backed
+    up before we patch it (uninstall restores it) and a freshly synthesised
+    one is tracked for removal.
+    """
+    game_dir = tx.game_dir
     wanted = {
         "HiresoMovie": "1" if opts["hq_movies"] else "0",
         # MGSHDFix owns resolution/upscaling; the launcher must stay at
@@ -747,7 +1060,9 @@ def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
                 log(f"    ⚠ couldn't parse {sv.name} ({e}); leaving it alone")
                 continue
             cur.update(wanted)
-            _write_launcher_sv(sv, list(cur.keys()), list(cur.values()))
+            tx.write_bytes(str(sv.relative_to(game_dir)),
+                           _launcher_sv_bytes(list(cur.keys()),
+                                              list(cur.values())))
             log(f"    ✓ launcher options patched ({sv.parent.parent.name})")
         return
 
@@ -766,8 +1081,8 @@ def set_launcher_options(game_dir: Path, g: dict, steam_root: Path,
             "(set them in the launcher on first run)")
         return
     for sid in ids:
-        _write_launcher_sv(save_root / str(sid) / "launcher" / "launcher_sv",
-                           keys, vals)
+        rel = f"{save_root.name}/{sid}/launcher/launcher_sv"
+        tx.write_bytes(rel, _launcher_sv_bytes(keys, vals))
         log(f"    ✓ launcher options created ({sid})")
 
 
@@ -785,6 +1100,85 @@ def verify_install(g: dict, game_dir: Path) -> list[str]:
     if not (game_dir / "plugins" / g["bugfix_asi"]).is_file():
         problems.append(f"missing plugins/{g['bugfix_asi']}")
     return problems
+
+
+# ---------------------------------------------------------------------------
+# Uninstall — reverse a previous install using its manifest.
+#
+# Removes every file the kit added (newest-first so directories empty out),
+# restores any original it backed up, and clears the obsolete legacy
+# MGSM2Fix.asi that upstream warns can clash with the unified 3.x release.
+# Multi-GB assets the Better Audio Mod overwrote were recorded but not backed
+# up (see BACKUP_MAX_BYTES); Steam's "Verify integrity of game files" restores
+# those, and we say so.
+# ---------------------------------------------------------------------------
+LEGACY_M2FIX_FILES = ("MGSM2Fix.asi",)
+
+
+def uninstall_game(game_dir: Path, log) -> list[str]:
+    """Reverse a kit install in `game_dir`. Returns human-readable notes."""
+    notes: list[str] = []
+    root = game_dir / MODKIT_DIRNAME
+    manifest = root / MANIFEST_NAME
+
+    # Always clear the obsolete legacy unified .asi, manifest or not.
+    for name in LEGACY_M2FIX_FILES:
+        legacy = game_dir / name
+        if legacy.is_file():
+            legacy.unlink()
+            notes.append(f"removed legacy {name}")
+
+    if not manifest.is_file():
+        notes.append("no install manifest found — nothing tracked to remove "
+                     "(use Steam → Verify integrity to reset any remaining "
+                     "mod files)")
+        return notes
+
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        notes.append(f"couldn't read manifest ({e}); left files in place")
+        return notes
+
+    added = data.get("added", [])
+    overwritten = data.get("overwritten", [])
+
+    removed = 0
+    for rel in reversed(added):
+        try:
+            (game_dir / rel).unlink(missing_ok=True)
+            removed += 1
+        except OSError as e:
+            notes.append(f"couldn't remove {rel} ({e})")
+    if removed:
+        notes.append(f"removed {removed} installed file(s)")
+
+    restored, verify_hint = 0, False
+    for o in overwritten:
+        rel, backup = o.get("path"), o.get("backup")
+        if backup:
+            src = root / backup
+            if src.is_file():
+                try:
+                    dst = game_dir / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                    restored += 1
+                except OSError as e:
+                    notes.append(f"couldn't restore {rel} ({e})")
+        else:
+            verify_hint = True
+    if restored:
+        notes.append(f"restored {restored} original file(s) from backup")
+    if verify_hint:
+        notes.append("some large originals (e.g. Better Audio assets) were "
+                     "not backed up — run Steam → Verify integrity of game "
+                     "files to restore them")
+
+    _prune_empty_dirs(game_dir, added)
+    shutil.rmtree(root, ignore_errors=True)
+    notes.append("removed the mgs-modkit backup/manifest folder")
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1415,72 @@ def offer_self_cleanup(ui: UI, desktop: Path | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Uninstall flow
+# ---------------------------------------------------------------------------
+def run_uninstall(ui: UI, log) -> int:
+    found = find_games()
+    if not found:
+        manual = ui.pick_dir("Select the MGS game folder to un-mod")
+        if not manual:
+            ui.error("No install selected. Aborting.")
+            return 1
+        d = Path(manual)
+        for key, g in GAMES.items():
+            if (d / g["exe"]).is_file():
+                found[key] = (d, Path.home())
+        if not found:
+            ui.error(f"No Master Collection game executable found in:\n{d}")
+            return 1
+
+    # Only offer games this kit actually touched (they have a manifest or the
+    # legacy .asi worth clearing).
+    modded = {k: v for k, v in found.items()
+              if (v[0] / MODKIT_DIRNAME / MANIFEST_NAME).is_file()
+              or any((v[0] / n).is_file() for n in LEGACY_M2FIX_FILES)}
+    if not modded:
+        ui.info("Nothing to uninstall — none of the detected games has a "
+                "mgs-modkit manifest from this installer.")
+        return 0
+
+    if len(modded) > 1:
+        picks = ui.checklist(
+            "MGS Mod Kit — Uninstall",
+            "Remove this kit's mods from:",
+            [(k, f"{GAMES[k]['name']}  ({modded[k][0]})", True)
+             for k in modded],
+        )
+        if not picks:
+            ui.error("Nothing selected. Aborting.")
+            return 1
+        modded = {k: v for k, v in modded.items() if k in picks}
+
+    names = ", ".join(GAMES[k]["short"] for k in modded)
+    if not ui.yesno(
+        f"Uninstall this kit's mods from {names}?\n\n"
+        "Files this kit added will be removed and any originals it backed up "
+        "restored. Your game saves are untouched.\n\n"
+        "Make sure THE GAMES AND STEAM'S DOWNLOADS ARE CLOSED. Proceed?"
+    ):
+        return 0
+
+    for key in modded:
+        g, (game_dir, _) = GAMES[key], modded[key]
+        log(f"\n=== Uninstalling {g['name']} ===")
+        for note in uninstall_game(game_dir, log):
+            log(f"    • {note}")
+
+    ui.info(
+        f"✅ {names} un-modded.\n\n"
+        "Remove the leftover Steam Launch Options too: right-click each game "
+        "in Steam → Properties → General → Launch Options and clear the "
+        "WINEDLLOVERRIDES line.\n\n"
+        "MGSHDFix also writes a logs/ folder and steam_appid.txt at runtime; "
+        "delete those if you want a spotless folder, or just run Steam → "
+        "Verify integrity of game files.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -1031,12 +1491,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--desktop", default=None,
                     help="Path of the launching .desktop shortcut (internal).")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="Reverse a previous install (restore backups, remove "
+                         "added files) instead of installing.")
     cli, _ = ap.parse_known_args()
     desktop = normalize_desktop_path(cli.desktop)
 
     def log(msg: str) -> None:
         print(msg)
         logs.append(msg)
+
+    if cli.uninstall:
+        return run_uninstall(ui, log)
 
     if not shutil.which("bsdtar"):
         ui.error("`bsdtar` is required but not found. On SteamOS it is "
@@ -1079,8 +1545,12 @@ def main() -> int:
             return 1
         found = {k: v for k, v in found.items() if k in picks}
 
-    # 3. Options (only relevant to the MGSHDFix games) -----------------------
+    # 3. Options -----------------------------------------------------------
+    # skip_launcher / update_check apply to BOTH the MGSHDFix games and MGS1
+    # (MGSM2Fix), so they're offered whenever any game is selected — an
+    # MGS1-only install must not silently inherit the defaults with no say.
     hdfix_sel = [k for k in found if GAMES[k].get("kind", "hdfix") == "hdfix"]
+    m2fix_sel = [k for k in found if GAMES[k].get("kind") == "m2fix"]
     device = detect_device()
     opts = {
         "device": device,
@@ -1115,22 +1585,37 @@ def main() -> int:
                                       "surround receiver / speaker setup")],
         ) or "Stereo (2.0)"
 
-        # (No MGS3 high-res texture option: Konami's official texture pack
-        # can be installed on the Steam Deck but cannot be used in-game,
-        # so the kit always leaves HiresoTexture=0.)
+    # Build the extras checklist from whatever's actually selected.
+    # (No MGS3 high-res texture option: Konami's official texture pack can be
+    # installed on the Steam Deck but cannot be used in-game, so the kit
+    # always leaves HiresoTexture=0.)
+    extra_items: list[tuple[str, str, bool]] = []
+    if hdfix_sel:
+        extra_items += [
+            ("hq_movies", "High-quality cinematics  (set for you — no "
+                          "launcher trip needed)", True),
+            ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
+        ]
+    if hdfix_sel or m2fix_sel:
+        skip_label = ("Boot straight into the games ("
+                      + " / ".join(filter(None, [
+                          "skip MGS2/3's Konami launcher" if hdfix_sel else "",
+                          "MGS1 re-boots your last-picked version"
+                          if m2fix_sel else ""])) + ")")
+        extra_items += [
+            ("skip_launcher", skip_label, True),
+            ("update_check", "Check for mod updates on launch", False),
+        ]
+    if extra_items:
         extras = ui.checklist(
             "Extra Options", "Optional tweaks (recommended defaults shown):",
-            [("hq_movies", "High-quality cinematics  (set for you — no "
-                           "launcher trip needed)", True),
-             ("skip_splash", "Skip the unskippable KONAMI intro logos", True),
-             ("skip_launcher", "Boot straight into the games (skip MGS2/3's "
-                               "Konami launcher; MGS1 re-boots your last-"
-                               "picked version)", True),
-             ("update_check", "Check for mod updates on launch", False)],
+            extra_items,
         )
-        for k in ("hq_movies", "skip_splash", "update_check",
-                  "skip_launcher"):
-            opts[k] = k in extras
+        # None == the user cancelled the dialog: keep the recommended
+        # defaults rather than reading a cancel as "turn everything off".
+        if extras is not None:
+            for tag, _, _ in extra_items:
+                opts[tag] = tag in extras
 
     # 4. Better Audio Mod (manual archive, MGS2/MGS3 only) -------------------
     audio_archives: dict[str, list[Path]] = {}
@@ -1183,30 +1668,40 @@ def main() -> int:
         return 0
 
     # 6. Do the work --------------------------------------------------------
+    # Each game is installed in its own transaction: on any failure that game
+    # is rolled back to exactly how it was found (added files removed, backed-up
+    # originals restored), so no half-modified install is left behind. Games
+    # already committed before the failure stay installed.
     try:
         with tempfile.TemporaryDirectory(prefix="mgskit_") as td:
             tmp = Path(td)
             for key in found:
                 g, (game_dir, sroot) = GAMES[key], found[key]
                 log(f"\n=== {g['name']} ===")
-                if g.get("kind", "hdfix") == "m2fix":
-                    install_m2fix(game_dir, tmp, opts, log)
-                else:
-                    install_hdfix(game_dir, tmp, log)        # 1
-                    if key in audio_archives:                # 2
-                        install_better_audio(game_dir,
-                                             audio_archives[key], log)
-                    install_bugfix(g, game_dir, tmp, log)    # 3
-                    write_settings(game_dir, g, opts, log)
-                    set_launcher_options(game_dir, g, sroot, opts, log)
+                tx = InstallTxn(game_dir, key, log)
+                try:
+                    if g.get("kind", "hdfix") == "m2fix":
+                        install_m2fix(tx, tmp, opts, log)
+                    else:
+                        install_hdfix(tx, tmp, log)              # 1
+                        if key in audio_archives:                # 2
+                            install_better_audio(tx, audio_archives[key], log)
+                        install_bugfix(tx, g, tmp, log)          # 3
+                        write_settings(tx, g, opts, log)
+                        set_launcher_options(tx, g, sroot, opts, log)
+                    tx.commit()
+                except BaseException:
+                    log(f"  ✗ {g['short']} failed — rolling back its changes …")
+                    tx.rollback()
+                    raise
                 for f in tmp.glob("*.zip"):
                     f.unlink(missing_ok=True)
     except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError,
             subprocess.CalledProcessError, OSError) as e:
         ui.error(f"Install failed:\n\n{e}\n\n"
-                 "Your game files may be partially modified — re-run this kit, "
-                 "or use Steam → Properties → Installed Files → Verify "
-                 "integrity to reset to stock.")
+                 "The affected game was rolled back to how it was found. If "
+                 "anything still looks off, use Steam → Properties → Installed "
+                 "Files → Verify integrity, or re-run with --uninstall.")
         return 1
 
     # 7. Verify -------------------------------------------------------------

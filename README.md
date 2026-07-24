@@ -14,6 +14,8 @@
 ![Python](https://img.shields.io/badge/python3-no_dependencies-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Licence](https://img.shields.io/badge/licence-MIT-green?style=for-the-badge)
 
+[![CI](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/actions/workflows/ci.yml/badge.svg)](https://github.com/cntrl-alt-lenny/mgs-mc-deck-modkit/actions/workflows/ci.yml)
+
 </div>
 
 ---
@@ -23,7 +25,8 @@
 <table>
 <tr><td width="60" align="center"><h3>1</h3></td><td>
 Download <a href="Install-MGS-Mods.desktop"><b><code>Install-MGS-Mods.desktop</code></b></a> and drop it on your Desktop.<br>
-<sub>KDE blocks downloaded shortcuts until you allow them: <b>right-click → Properties → Permissions → tick "Is executable"</b>.</sub>
+<sub>KDE blocks downloaded shortcuts until you allow them: <b>right-click → Properties → Permissions → tick "Is executable"</b>.</sub><br>
+<sub>🔒 The shortcut downloads <code>install.py</code> from a <b>pinned GitHub release</b> and verifies its SHA-256 before running it — never an unchecked live script.</sub>
 </td></tr>
 <tr><td align="center"><h3>2</h3></td><td>
 <i>(Recommended)</i> Grab the <b>Better Audio Mod</b> for each game — just leave
@@ -78,6 +81,29 @@ In Steam, for <b>each</b> game → <i>Properties → Launch Options</i>, paste
 Installed in that exact order — it's required, and the kit enforces it.
 Everything is fetched live from the authors' official releases; **nothing is
 rehosted here.**
+
+---
+
+## 🔒 Safe by design
+
+| | |
+|:--|:--|
+| ✅ **Checksummed downloads** | Every auto-fetched archive is verified against a pinned SHA-256 before it's touched — a corrupted or tampered file never reaches your game folder |
+| ✅ **Transactional installs** | Archives are extracted to a staging area and every path is validated (no `../` traversal, no absolute paths, no symlinks) before anything is copied in |
+| ✅ **Backups + rollback** | Overwritten originals are backed up and every change is recorded; a mid-install failure rolls that game back to exactly how it was found |
+| ✅ **One-command uninstall** | `python3 install.py --uninstall` reverses everything using the recorded manifest |
+| ✅ **Tested** | A [CI](.github/workflows/ci.yml) test-suite covers discovery, every game combo, malicious/corrupt archives, rollback, idempotent re-installs and uninstall |
+
+<sub>Run the tests yourself: `pip install pytest && python3 -m pytest tests/`
+(needs `bsdtar`). Bumping a mod version? `python3 tools/refresh_checksums.py`
+prints the new hashes.</sub>
+
+<sub>🛠️ **Maintainers:** the shortcut pins the installer to release **`v1.1.0`**.
+To cut a release, push a matching tag (`git tag v1.1.0 && git push --tags`) —
+[`release.yml`](.github/workflows/release.yml) runs the tests, publishes
+`install.py` + a `SHA256SUMS` file, and the `.desktop`'s baked-in hash must
+match that `install.py`. After editing `install.py`, update the `SHA=` value in
+`Install-MGS-Mods.desktop` (`sha256sum install.py`) and bump the tag.</sub>
 
 ---
 
@@ -232,9 +258,28 @@ removed, and startup notices are skipped.
 
 <br>
 
-**Revert to stock:** Steam → the game → *Properties → Installed Files → Verify
-integrity of game files*. Then delete the added files if you want a clean
-slate: `winhttp.dll`, `wininet.dll`, `plugins/`, `logs/`, `steam_appid.txt`.
+**Clean uninstall (recommended):** re-run the installer with `--uninstall`:
+
+```bash
+python3 install.py --uninstall
+```
+
+Every install is **transactional** — the kit records exactly which files it
+added and backs up any it overwrote in a hidden `mgs-modkit/` folder inside the
+game directory. `--uninstall` reads that manifest, removes the files it added,
+restores the originals it backed up, and clears the obsolete legacy
+`MGSM2Fix.asi` that upstream warns can clash with the unified 3.x release. Your
+game saves are never touched. (Multi-GB Better Audio assets are recorded but
+not backed up — use *Verify integrity* below to restore those.)
+
+**Manual revert to stock:** Steam → the game → *Properties → Installed Files →
+Verify integrity of game files*. To also delete the added files by hand:
+
+- **MGS2 / MGS3:** `winhttp.dll`, `wininet.dll`, `plugins/`, `mgs-modkit/`,
+  `logs/`, `steam_appid.txt`
+- **MGS1:** `d3d11.dll`, `dinput8.dll`, `MGSM2Fix64.asi`, `MGSM2Fix32.asi`,
+  `MGSM2Fix.ini`, `mgs-modkit/` — and delete the obsolete `MGSM2Fix.asi` (a
+  pre-unified build) if you see one, as it conflicts with newer releases.
 
 **"Failed to read config key…"** — your settings file doesn't match your
 MGSHDFix version. Run `MGSHDFix Config Tool.exe` in the game's `plugins/`
