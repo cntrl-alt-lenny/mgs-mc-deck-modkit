@@ -28,14 +28,37 @@ jobs:
           python -m pip install --upgrade pip pytest
           python -m pytest tests/ -q
 
+      - name: Verify the shortcut pins THIS tag and THIS install.py
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          PIN_TAG=$(grep -oP 'TAG=\K[^;]+' Install-MGS-Mods.desktop)
+          PIN_SHA=$(grep -oP 'SHA=\K[0-9a-f]{64}' Install-MGS-Mods.desktop)
+          FILE_SHA=$(sha256sum install.py | cut -d' ' -f1)
+          echo "release tag      : $TAG"
+          echo "shortcut TAG=    : $PIN_TAG"
+          echo "shortcut SHA=    : $PIN_SHA"
+          echo "install.py sha256: $FILE_SHA"
+          if [ "$PIN_TAG" != "$TAG" ]; then
+            echo "::error::Install-MGS-Mods.desktop pins TAG=$PIN_TAG but this release is $TAG"
+            exit 1
+          fi
+          if [ "$PIN_SHA" != "$FILE_SHA" ]; then
+            echo "::error::Install-MGS-Mods.desktop pins SHA=$PIN_SHA but install.py is $FILE_SHA"
+            exit 1
+          fi
+          echo "✓ shortcut matches this release's tag and install.py"
+
       - name: Generate checksums
         run: |
           sha256sum install.py Install-MGS-Mods.desktop > SHA256SUMS
-          echo "## Installer checksum" >> notes.md
-          echo '```' >> notes.md
-          cat SHA256SUMS >> notes.md
-          echo '```' >> notes.md
-          echo "Verify the SHA-256 baked into Install-MGS-Mods.desktop matches install.py above."
+          {
+            echo "## Installer checksum"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo "The shortcut's embedded tag + SHA-256 were verified against install.py in CI."
+          } >> notes.md
 
       - name: Create the release
         uses: softprops/action-gh-release@v2

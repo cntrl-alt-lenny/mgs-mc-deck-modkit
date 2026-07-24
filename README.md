@@ -90,20 +90,26 @@ rehosted here.**
 |:--|:--|
 | ✅ **Checksummed downloads** | Every auto-fetched archive is verified against a pinned SHA-256 before it's touched — a corrupted or tampered file never reaches your game folder |
 | ✅ **Transactional installs** | Archives are extracted to a staging area and every path is validated (no `../` traversal, no absolute paths, no symlinks) before anything is copied in |
-| ✅ **Backups + rollback** | Overwritten originals are backed up and every change is recorded; a mid-install failure rolls that game back to exactly how it was found |
+| ✅ **Backups + rollback** | Fix-mod files are backed up and every change recorded, so a mid-install failure rolls that game back (and a failed re-install falls back to your previous working setup). All archives are downloaded *before* anything is written, so a dropped connection can't strand you |
 | ✅ **One-command uninstall** | `python3 install.py --uninstall` reverses everything using the recorded manifest |
 | ✅ **Tested** | A [CI](.github/workflows/ci.yml) test-suite covers discovery, every game combo, malicious/corrupt archives, rollback, idempotent re-installs and uninstall |
+
+<sub>One honest caveat: the Better Audio Mod overwrites some multi-GB stock game
+files, which are too large to back up. Those specific files are restored with
+Steam's *Verify integrity* rather than by the kit — everything else is fully
+reversible.</sub>
 
 <sub>Run the tests yourself: `pip install pytest && python3 -m pytest tests/`
 (needs `bsdtar`). Bumping a mod version? `python3 tools/refresh_checksums.py`
 prints the new hashes.</sub>
 
-<sub>🛠️ **Maintainers:** the shortcut pins the installer to release **`v1.2.0`**.
-To cut a release, push a matching tag (`git tag v1.2.0 && git push --tags`) —
-[`release.yml`](.github/workflows/release.yml) runs the tests, publishes
-`install.py` + a `SHA256SUMS` file, and the `.desktop`'s baked-in hash must
-match that `install.py`. After editing `install.py`, update the `SHA=` value in
-`Install-MGS-Mods.desktop` (`sha256sum install.py`) and bump the tag.</sub>
+<sub>🛠️ **Maintainers:** the shortcut pins the installer to release **`v1.3.0`**.
+To cut a release, push a matching tag (`git tag v1.3.0 && git push --tags`) —
+[`release.yml`](.github/workflows/release.yml) runs the tests, **fails if the
+shortcut's baked-in tag/hash doesn't match `install.py`**, then publishes
+`install.py` + a `SHA256SUMS` file. After editing `install.py`, update the
+`TAG=`/`SHA=` values in `Install-MGS-Mods.desktop` (`sha256sum install.py`) and
+bump the tag.</sub>
 
 ---
 

@@ -65,7 +65,7 @@ from pathlib import Path
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) mgs-mc-deck-modkit"
 
-MODKIT_VERSION = "1.2.0"
+MODKIT_VERSION = "1.3.0"
 
 # Directory (inside each game folder) where this kit records what it installed,
 # keeps backups of any files it overwrote, and stages archives before copying
@@ -624,6 +624,21 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def fetch(url: str, dest: Path, log, sha256: str | None = None) -> None:
+    """Download `url` unless `dest` already holds the pinned bytes.
+
+    Lets main() pre-download every archive a game needs BEFORE any destructive
+    extraction, so a network failure strikes before — never after — large stock
+    files are overwritten (those over BACKUP_MAX_BYTES can't be rolled back).
+    The per-step install functions then reuse the cached, verified file.
+    """
+    if (dest.is_file() and sha256
+            and sha256_file(dest).lower() == sha256.lower()):
+        log(f"  ↓ (verified, already downloaded) {url.rsplit('/', 1)[-1]}")
+        return
+    download(url, dest, log, sha256=sha256)
+
+
 # ---------------------------------------------------------------------------
 # Safe extraction — validate an archive's paths BEFORE trusting its contents.
 #
@@ -756,9 +771,15 @@ class InstallTxn:
         self.mods: dict[str, str] = {}
         self._added_set: set[str] = set()
         self._backed_up: set[str] = set()
-        # Files a previous run of this kit already installed: treat them as
-        # "ours", so a re-install neither backs them up as if they were stock
-        # originals nor double-counts them.
+        # Rollback bookkeeping, tracked separately from the uninstall manifest:
+        # rollback must undo ONLY what THIS run did, and must never destroy a
+        # previous install's recovery data (its manifest + backups).
+        self._new_added: list[str] = []      # files this run created from scratch
+        self._new_backups: list[str] = []    # backup rel-paths this run wrote
+        # Whether a previous run of this kit is already installed here. Its
+        # files are treated as "ours" (reclaimed, not re-backed-up as stock),
+        # and on a failed re-install its manifest/backups are left intact.
+        self._had_prior = False
         self._prior_added: set[str] = set()
         prev = self.root / MANIFEST_NAME
         if prev.is_file():
@@ -772,6 +793,7 @@ class InstallTxn:
                 for o in data.get("overwritten", []):
                     self.overwritten.append(o)
                     self._backed_up.add(o["path"])
+                self._had_prior = True
             except (ValueError, OSError, KeyError):
                 pass
 
@@ -787,7 +809,9 @@ class InstallTxn:
         if dest.exists():
             if rel in self._prior_added:
                 # Our own file from a previous run — reclaim it as added so
-                # uninstall removes it, and don't back it up.
+                # uninstall removes it, and don't back it up. It is NOT counted
+                # as new-this-run: rollback must leave the previous install's
+                # files in place, not delete them.
                 self._added_set.add(rel)
                 self.added.append(rel)
                 return
@@ -800,11 +824,13 @@ class InstallTxn:
                     shutil.copy2(dest, bpath)
                     self.overwritten.append(
                         {"path": rel, "backup": f"backups/{rel}"})
+                    self._new_backups.append(rel)
                 else:
                     self.overwritten.append({"path": rel, "backup": None})
         else:
             self._added_set.add(rel)
             self.added.append(rel)
+            self._new_added.append(rel)
 
     # -- operations ------------------------------------------------------
     def install_archive(self, archive: Path) -> list[str]:
@@ -858,24 +884,42 @@ class InstallTxn:
             encoding="utf-8")
 
     def rollback(self) -> None:
-        """Undo everything this transaction did (best-effort, never raises)."""
-        for rel in reversed(self.added):
+        """Undo ONLY what this run did (best-effort, never raises).
+
+        Files this run created are removed and stock originals this run backed
+        up are restored. Files that belonged to a PREVIOUS install of this kit
+        are left in place, and that previous install's manifest + backups are
+        preserved — a failed re-install falls back to the last working install
+        rather than orphaning files or destroying its recovery data.
+        """
+        # 1. Remove only files this run created from scratch.
+        for rel in reversed(self._new_added):
             try:
                 (self.game_dir / rel).unlink(missing_ok=True)
             except OSError:
                 pass
-        for o in self.overwritten:
-            if o.get("backup"):
-                src = self.root / o["backup"]
-                if src.is_file():
-                    try:
-                        dst = self.game_dir / o["path"]
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dst)
-                    except OSError:
-                        pass
-        _prune_empty_dirs(self.game_dir, self.added)
-        shutil.rmtree(self.root, ignore_errors=True)
+        # 2. Restore stock originals this run overwrote-and-backed-up, then drop
+        #    those now-irrelevant backup copies (they belong to this aborted run).
+        for rel in self._new_backups:
+            src = self.backups / rel
+            if src.is_file():
+                try:
+                    dst = self.game_dir / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                    src.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        _prune_empty_dirs(self.game_dir, self._new_added)
+
+        if self._had_prior:
+            # Keep the previous install intact: leave its manifest.json (never
+            # rewritten until commit) and its backups. Only clear this run's
+            # transient staging.
+            shutil.rmtree(self.staging, ignore_errors=True)
+        else:
+            # Fresh install that failed — nothing of ours should remain.
+            shutil.rmtree(self.root, ignore_errors=True)
 
 
 def _prune_empty_dirs(base: Path, rels: list[str]) -> None:
@@ -900,7 +944,7 @@ def _prune_empty_dirs(base: Path, rels: list[str]) -> None:
 def install_hdfix(tx: InstallTxn, tmp: Path, log) -> None:
     log(f"  Installing MGSHDFix {HDFIX_VERSION} …")
     zp = tmp / f"MGSHDFix_{HDFIX_VERSION}.zip"
-    download(HDFIX_URL, zp, log, sha256=HDFIX_SHA256)
+    fetch(HDFIX_URL, zp, log, sha256=HDFIX_SHA256)
     tx.install_archive(zp)
     tx.note_mod("MGSHDFix", HDFIX_VERSION)
     missing = [n for n in ("winhttp.dll", "wininet.dll")
@@ -934,7 +978,7 @@ def install_better_audio(tx: InstallTxn, archives: list[Path], log) -> None:
 def install_m2fix(tx: InstallTxn, tmp: Path, opts: dict, log) -> None:
     log(f"  Installing MGSM2Fix {M2FIX_VERSION} …")
     zp = tmp / f"MGSM2Fix_{M2FIX_VERSION}.zip"
-    download(M2FIX_URL, zp, log, sha256=M2FIX_SHA256)
+    fetch(M2FIX_URL, zp, log, sha256=M2FIX_SHA256)
     tx.install_archive(zp)
     tx.note_mod("MGSM2Fix", M2FIX_VERSION)
     missing = [n for n in ("d3d11.dll", "dinput8.dll", "MGSM2Fix64.asi",
@@ -960,7 +1004,7 @@ def install_bugfix(tx: InstallTxn, g: dict, tmp: Path, log) -> None:
     log(f"  Installing {g['short']} Community Bugfix Compilation "
         f"{g['bugfix_version']} (Base) …")
     zp = tmp / f"{g['short']}_bugfix_base.zip"
-    download(g["bugfix_url"], zp, log, sha256=g.get("bugfix_sha256"))
+    fetch(g["bugfix_url"], zp, log, sha256=g.get("bugfix_sha256"))
     tx.install_archive(zp)
     tx.note_mod(f"{g['short']} Community Bugfix Compilation",
                 g["bugfix_version"])
@@ -1115,9 +1159,17 @@ def verify_install(g: dict, game_dir: Path) -> list[str]:
 LEGACY_M2FIX_FILES = ("MGSM2Fix.asi",)
 
 
-def uninstall_game(game_dir: Path, log) -> list[str]:
-    """Reverse a kit install in `game_dir`. Returns human-readable notes."""
+def uninstall_game(game_dir: Path, log) -> tuple[list[str], bool]:
+    """Reverse a kit install in `game_dir`.
+
+    Returns (notes, ok). If any file couldn't be removed or restored, ok is
+    False AND the manifest + backups are LEFT IN PLACE — never delete the
+    recovery data while a restore is still outstanding, and never report
+    success when files are still in a half-reverted state. Re-running can then
+    retry, or the user can restore by hand.
+    """
     notes: list[str] = []
+    errors = False
     root = game_dir / MODKIT_DIRNAME
     manifest = root / MANIFEST_NAME
 
@@ -1125,34 +1177,30 @@ def uninstall_game(game_dir: Path, log) -> list[str]:
     for name in LEGACY_M2FIX_FILES:
         legacy = game_dir / name
         if legacy.is_file():
-            legacy.unlink()
-            notes.append(f"removed legacy {name}")
+            try:
+                legacy.unlink()
+                notes.append(f"removed legacy {name}")
+            except OSError as e:
+                notes.append(f"couldn't remove legacy {name} ({e})")
+                errors = True
 
     if not manifest.is_file():
         notes.append("no install manifest found — nothing tracked to remove "
                      "(use Steam → Verify integrity to reset any remaining "
                      "mod files)")
-        return notes
+        return notes, not errors
 
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
     except (ValueError, OSError) as e:
         notes.append(f"couldn't read manifest ({e}); left files in place")
-        return notes
+        return notes, False
 
     added = data.get("added", [])
     overwritten = data.get("overwritten", [])
 
-    removed = 0
-    for rel in reversed(added):
-        try:
-            (game_dir / rel).unlink(missing_ok=True)
-            removed += 1
-        except OSError as e:
-            notes.append(f"couldn't remove {rel} ({e})")
-    if removed:
-        notes.append(f"removed {removed} installed file(s)")
-
+    # Restore originals FIRST (before removing added files), so a file that is
+    # both added-by-us and has a stock backup ends up as the stock original.
     restored, verify_hint = 0, False
     for o in overwritten:
         rel, backup = o.get("path"), o.get("backup")
@@ -1166,8 +1214,26 @@ def uninstall_game(game_dir: Path, log) -> list[str]:
                     restored += 1
                 except OSError as e:
                     notes.append(f"couldn't restore {rel} ({e})")
+                    errors = True
+            else:
+                notes.append(f"backup for {rel} is missing; can't restore it")
+                errors = True
         else:
             verify_hint = True
+
+    removed = 0
+    restored_paths = {o.get("path") for o in overwritten if o.get("backup")}
+    for rel in reversed(added):
+        if rel in restored_paths:
+            continue  # a stock original was just put back here — keep it
+        try:
+            (game_dir / rel).unlink(missing_ok=True)
+            removed += 1
+        except OSError as e:
+            notes.append(f"couldn't remove {rel} ({e})")
+            errors = True
+    if removed:
+        notes.append(f"removed {removed} installed file(s)")
     if restored:
         notes.append(f"restored {restored} original file(s) from backup")
     if verify_hint:
@@ -1176,9 +1242,14 @@ def uninstall_game(game_dir: Path, log) -> list[str]:
                      "files to restore them")
 
     _prune_empty_dirs(game_dir, added)
+    if errors:
+        notes.append("left the mgs-modkit backup/manifest folder in place so "
+                     "you can retry — some files could not be reverted")
+        return notes, False
+
     shutil.rmtree(root, ignore_errors=True)
     notes.append("removed the mgs-modkit backup/manifest folder")
-    return notes
+    return notes, True
 
 
 # ---------------------------------------------------------------------------
@@ -1463,11 +1534,24 @@ def run_uninstall(ui: UI, log) -> int:
     ):
         return 0
 
+    all_ok = True
     for key in modded:
         g, (game_dir, _) = GAMES[key], modded[key]
         log(f"\n=== Uninstalling {g['name']} ===")
-        for note in uninstall_game(game_dir, log):
+        notes, ok = uninstall_game(game_dir, log)
+        all_ok = all_ok and ok
+        for note in notes:
             log(f"    • {note}")
+
+    if not all_ok:
+        ui.error(
+            f"{names}: uninstall finished with problems — some files could "
+            "not be removed or restored, so the mgs-modkit backup/manifest "
+            "folder was kept for a retry.\n\n"
+            "Close the games and Steam's downloads, then run --uninstall "
+            "again, or use Steam → Properties → Installed Files → Verify "
+            "integrity of game files to reset to stock.")
+        return 1
 
     ui.info(
         f"✅ {names} un-modded.\n\n"
@@ -1683,6 +1767,15 @@ def main() -> int:
                     if g.get("kind", "hdfix") == "m2fix":
                         install_m2fix(tx, tmp, opts, log)
                     else:
+                        # Pre-download every networked archive BEFORE touching
+                        # the game, so a download failure can't strike after the
+                        # large, un-backed-up Better Audio files are overwritten.
+                        log("  Downloading mods (verifying checksums) …")
+                        fetch(HDFIX_URL, tmp / f"MGSHDFix_{HDFIX_VERSION}.zip",
+                              log, sha256=HDFIX_SHA256)
+                        fetch(g["bugfix_url"],
+                              tmp / f"{g['short']}_bugfix_base.zip",
+                              log, sha256=g.get("bugfix_sha256"))
                         install_hdfix(tx, tmp, log)              # 1
                         if key in audio_archives:                # 2
                             install_better_audio(tx, audio_archives[key], log)
@@ -1699,9 +1792,13 @@ def main() -> int:
     except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError,
             subprocess.CalledProcessError, OSError) as e:
         ui.error(f"Install failed:\n\n{e}\n\n"
-                 "The affected game was rolled back to how it was found. If "
-                 "anything still looks off, use Steam → Properties → Installed "
-                 "Files → Verify integrity, or re-run with --uninstall.")
+                 "The affected game was rolled back — files this run added were "
+                 "removed and the fix-mod originals it backed up restored (a "
+                 "failed re-install falls back to your previous working setup). "
+                 "The large Better Audio stock files aren't backed up, so if "
+                 "audio had already been written, run Steam → Properties → "
+                 "Installed Files → Verify integrity to be safe. You can also "
+                 "re-run this kit, or --uninstall.")
         return 1
 
     # 7. Verify -------------------------------------------------------------

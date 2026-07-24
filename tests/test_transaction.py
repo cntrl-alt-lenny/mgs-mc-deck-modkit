@@ -120,8 +120,9 @@ def test_uninstall_reverses_install(tmp_path, game_dir, patch_download):
     steam_root = make_steam_root(tmp_path)
     install_mgs2_full(game_dir, steam_root)
 
-    notes = install.uninstall_game(game_dir, _noop)
+    notes, ok = install.uninstall_game(game_dir, _noop)
 
+    assert ok
     assert (game_dir / "winhttp.dll").read_bytes() == b"ORIGINAL-STOCK"
     assert not (game_dir / "plugins" / "MGSHDFix.asi").exists()
     assert not (game_dir / "plugins" / "MGSHDFix.settings").exists()
@@ -145,7 +146,8 @@ def test_idempotent_reinstall(tmp_path, game_dir, patch_download):
     assert install.verify_install(install.GAMES["mgs2"], game_dir) == []
 
     # A clean uninstall still returns to stock after a double install.
-    install.uninstall_game(game_dir, _noop)
+    _, ok = install.uninstall_game(game_dir, _noop)
+    assert ok
     assert (game_dir / "winhttp.dll").read_bytes() == b"ORIGINAL-STOCK"
     assert not (game_dir / install.MODKIT_DIRNAME).exists()
 
@@ -162,7 +164,8 @@ def test_large_overwrite_not_backed_up(tmp_path, game_dir, patch_download,
     over = {o["path"]: o for o in manifest["overwritten"]}
     assert over["winhttp.dll"]["backup"] is None
 
-    notes = install.uninstall_game(game_dir, _noop)
+    notes, ok = install.uninstall_game(game_dir, _noop)
+    assert ok
     assert any("Verify integrity" in n for n in notes)
 
 
@@ -180,7 +183,8 @@ def test_m2fix_ini_patched_and_tracked(tmp_path, patch_download):
     assert "StartGame = true" in ini
     assert "CheckForUpdates = false" in ini
 
-    install.uninstall_game(game_dir, _noop)
+    _, ok = install.uninstall_game(game_dir, _noop)
+    assert ok
     assert not (game_dir / "MGSM2Fix.ini").exists()
     assert not (game_dir / "MGSM2Fix64.asi").exists()
 
@@ -190,6 +194,67 @@ def test_uninstall_removes_legacy_asi(tmp_path):
     game_dir.mkdir()
     (game_dir / "MGSM2Fix.asi").write_bytes(b"legacy-unified-asi")
 
-    notes = install.uninstall_game(game_dir, _noop)
+    notes, ok = install.uninstall_game(game_dir, _noop)
+    assert ok
     assert not (game_dir / "MGSM2Fix.asi").exists()
     assert any("legacy" in n for n in notes)
+
+
+def test_failed_reinstall_preserves_previous_install(tmp_path, game_dir,
+                                                     patch_download, monkeypatch):
+    """A re-install that fails must fall back to the previous working install,
+    not orphan files or destroy its manifest/backups."""
+    (game_dir / "winhttp.dll").write_bytes(b"ORIGINAL-STOCK")
+    steam_root = make_steam_root(tmp_path)
+    install_mgs2_full(game_dir, steam_root)           # run 1: succeeds
+
+    manifest_path = game_dir / install.MODKIT_DIRNAME / install.MANIFEST_NAME
+    m1 = manifest_path.read_text()
+    asi = (game_dir / "plugins" / "MGSHDFix.asi").read_bytes()
+
+    # run 2: fails at the bugfix step, after HDFix has been re-applied.
+    g = install.GAMES["mgs2"]
+    import tempfile
+    import pytest
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        tx = install.InstallTxn(game_dir, "mgs2", _noop)
+        with pytest.raises(RuntimeError):
+            try:
+                install.install_hdfix(tx, tmp, _noop)
+                raise RuntimeError("simulated failure during re-install")
+            except BaseException:
+                tx.rollback()
+                raise
+
+    # Previous install is intact: manifest + backups preserved, files present,
+    # true stock backup NOT clobbered, still a complete install.
+    assert manifest_path.read_text() == m1
+    assert (game_dir / "plugins" / "MGSHDFix.asi").read_bytes() == asi
+    backup = game_dir / install.MODKIT_DIRNAME / "backups" / "winhttp.dll"
+    assert backup.read_bytes() == b"ORIGINAL-STOCK"
+    assert install.verify_install(g, game_dir) == []
+
+    # And it can still be cleanly uninstalled back to stock.
+    _, ok = install.uninstall_game(game_dir, _noop)
+    assert ok
+    assert (game_dir / "winhttp.dll").read_bytes() == b"ORIGINAL-STOCK"
+    assert not (game_dir / install.MODKIT_DIRNAME).exists()
+
+
+def test_uninstall_keeps_recovery_data_on_error(tmp_path, game_dir,
+                                                patch_download, monkeypatch):
+    """If a restore fails, the manifest/backups must survive and ok must be
+    False — never report success while files are half-reverted."""
+    (game_dir / "winhttp.dll").write_bytes(b"ORIGINAL-STOCK")
+    steam_root = make_steam_root(tmp_path)
+    install_mgs2_full(game_dir, steam_root)
+
+    # Make one restore fail by deleting a backup out from under the uninstaller.
+    (game_dir / install.MODKIT_DIRNAME / "backups" / "winhttp.dll").unlink()
+
+    notes, ok = install.uninstall_game(game_dir, _noop)
+    assert ok is False
+    # Recovery data kept for a retry.
+    assert (game_dir / install.MODKIT_DIRNAME / install.MANIFEST_NAME).is_file()
+    assert any("could not be reverted" in n for n in notes)
